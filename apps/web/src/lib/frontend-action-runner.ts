@@ -28,6 +28,29 @@ export type FrontendActionRunnerDeps = {
   onStatus?: (status: FrontendActionStatus, message: string) => void;
 };
 
+function contextFingerprint(context: unknown) {
+  try {
+    return JSON.stringify(context);
+  } catch {
+    return String(context);
+  }
+}
+
+async function waitForFreshActionContext(
+  deps: FrontendActionRunnerDeps,
+  beforeContext: unknown,
+) {
+  const before = contextFingerprint(beforeContext);
+  let latest = beforeContext;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    latest = await deps.getFreshContext();
+    if (contextFingerprint(latest) !== before) return latest;
+  }
+
+  return latest;
+}
+
 function notify(
   deps: FrontendActionRunnerDeps,
   status: FrontendActionStatus,
@@ -43,6 +66,7 @@ export async function runFrontendActionInterrupt(
 ) {
   try {
     notify(deps, "running", "Running browser action...");
+    const beforeContext = await deps.getFreshContext();
     const result = await deps.callAction(
       interrupt.action.name,
       interrupt.action.args,
@@ -50,9 +74,9 @@ export async function runFrontendActionInterrupt(
     notify(
       deps,
       "resuming",
-      "Browser action finished. Returning the result to the agent...",
+      "Browser action finished. Refreshing page context before the agent continues...",
     );
-    const pageContext = await deps.getFreshContext();
+    const pageContext = await waitForFreshActionContext(deps, beforeContext);
     deps.submit(
       {},
       {

@@ -68,3 +68,35 @@ test("frontend action runner resumes the agent even after the view stops accepti
     },
   ]);
 });
+
+test("frontend action runner waits for changed page context before resuming", async () => {
+  const submitCalls: unknown[] = [];
+  const contexts = [
+    { readables: [{ id: "__ams_runtime_context", value: { route: "/categories" } }], actions: [] },
+    { readables: [{ id: "__ams_runtime_context", value: { route: "/categories" } }], actions: [] },
+    { readables: [{ id: "__ams_runtime_context", value: { route: "/inspections" } }], actions: [] },
+  ];
+
+  const interrupt: FrontendActionInterrupt = {
+    type: "frontend_action_request",
+    action: {
+      name: "open_form",
+      args: { form_id: "inspection_create" },
+    },
+  };
+
+  await runFrontendActionInterrupt(interrupt, {
+    callAction: async () => ({ ok: true }),
+    getFreshContext: async () => contexts.shift() ?? contexts[contexts.length - 1],
+    submit: (...args: unknown[]) => {
+      submitCalls.push(args);
+    },
+  });
+
+  assert.equal(submitCalls.length, 1);
+  assert.deepEqual(
+    (submitCalls[0] as Array<{ config?: { configurable?: { pageContext?: unknown } } }>)[1]
+      .config?.configurable?.pageContext,
+    { readables: [{ id: "__ams_runtime_context", value: { route: "/inspections" } }], actions: [] },
+  );
+});

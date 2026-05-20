@@ -1,5 +1,9 @@
 import { ChatOpenAI } from "@langchain/openai";
-import { contextEditingMiddleware, createAgent } from "langchain";
+import {
+  contextEditingMiddleware,
+  createAgent,
+  todoListMiddleware,
+} from "langchain";
 
 import { formSubmitApprovalMiddleware } from "./approval-middleware.js";
 import { pageContextMiddleware } from "./page-context-middleware.js";
@@ -67,6 +71,7 @@ const agent = createAgent({
   tools: TOOLS,
   middleware: [
     pageContextMiddleware,
+    todoListMiddleware(),
     formSubmitApprovalMiddleware,
     contextEditingMiddleware(),
   ],

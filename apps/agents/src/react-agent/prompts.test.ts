@@ -148,12 +148,14 @@ test("prompt forbids invalid inline OpenUI variable assignments", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /include every defined variable/i);
 });
 
-test("prompt stops after navigation or form-open actions until page context refreshes", () => {
+test("prompt continues after navigation or form-open actions with refreshed page context", () => {
   assert.match(
     SYSTEM_PROMPT_TEMPLATE,
     /After a frontend action navigates, opens a form, or changes which form is active/i
   );
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /wait for fresh page context/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /refreshed LIVE PAGE STATE/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /continue the same user task/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /Do not stop just to ask the user to continue/i);
 });
 
 test("prompt lets the agent triage hidden proactive update events", () => {
