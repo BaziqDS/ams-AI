@@ -133,6 +133,41 @@
   }
 }
 
+.ams-context-chip {
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 10px 0;
+  padding: 4px 10px 4px 8px;
+  border: 1px solid color-mix(in oklch, var(--border) 88%, var(--foreground) 8%);
+  border-radius: 999px;
+  color: color-mix(in oklch, var(--foreground) 82%, var(--muted-foreground));
+  background: color-mix(in oklch, var(--background) 92%, white);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+}
+
+.ams-context-chip-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--primary) 86%, var(--foreground));
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--primary) 12%, transparent);
+}
+
+.ams-context-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ----------------------------------------------------------------------------
  * Animation utilities (formerly provided by tailwindcss-animate v1, which is
  * not Tailwind v4 compatible). Reimplemented inline so animate-in / fade-in /

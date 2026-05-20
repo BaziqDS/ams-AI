@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  TOOLS,
   filterInspectableSqlTables,
   formatHiddenSqlTablesWarning,
 } from "./tools.js";
@@ -34,4 +35,13 @@ test("hidden table warning does not leak sensitive table names in normal discove
   assert.match(warning, /2 internal or sensitive tables are hidden/i);
   assert.doesNotMatch(warning, /auth_user/);
   assert.doesNotMatch(warning, /django_session/);
+});
+
+test("sql select tool description reinforces schema-first usage", () => {
+  const selectTool = TOOLS.find(tool => tool.name === "sql_db_select");
+  assert.ok(selectTool);
+  assert.match(selectTool.description, /Do not guess table names/i);
+  assert.match(selectTool.description, /sql_db_list_tables/i);
+  assert.match(selectTool.description, /sql_db_schema/i);
+  assert.match(selectTool.description, /LIMIT/i);
 });

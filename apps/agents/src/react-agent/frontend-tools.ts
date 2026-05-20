@@ -192,13 +192,14 @@ export function formatFrontendActionResult(
     const ignored = stringArrayField(result, "ignored");
     if (unknown.length > 0 || ignored.length > 0) {
       const parts = [
-        `Frontend action "${name}" PARTIAL.`,
+        `Frontend action "${name}" PARTIAL - NOT SUCCESSFUL.`,
         unknown.length > 0
           ? `Unknown fields were not filled: ${unknown.join(", ")}.`
           : undefined,
         ignored.length > 0
           ? `Ignored fields were not filled: ${ignored.join(", ")}.`
           : undefined,
+        `Do not describe the action as filled, saved, done, or successful unless the user-visible result was actually applied.`,
         `Result: ${renderResult(result)}.`,
       ].filter(Boolean);
       return parts.join(" ");

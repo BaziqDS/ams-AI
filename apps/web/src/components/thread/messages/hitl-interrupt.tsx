@@ -104,7 +104,7 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
             disabled={Boolean(busy) || thread.isLoading}
           >
             <X className="size-3.5" />
-            {busy === "reject" ? "Rejecting…" : "Reject"}
+            {busy === "reject" ? "Rejecting..." : "Reject"}
           </Button>
           <Button
             type="button"
@@ -113,7 +113,7 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
             disabled={Boolean(busy) || thread.isLoading}
           >
             <Check className="size-3.5" />
-            {busy === "approve" ? "Approving…" : "Approve"}
+            {busy === "approve" ? "Approving..." : "Approve"}
           </Button>
         </div>
       </div>

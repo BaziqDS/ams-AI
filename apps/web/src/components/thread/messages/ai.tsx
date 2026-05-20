@@ -27,6 +27,8 @@ import { ensureToolCallsHaveResponses } from "@/lib/ensure-tool-responses";
 import { copilotBridge } from "@/lib/copilot-bridge";
 import { isAmsRelativeRoute } from "@/lib/ams-route";
 
+const NO_PROACTIVE_RESPONSE = "__AMS_NO_PROACTIVE_RESPONSE__";
+
 function CustomComponent({
   message,
   thread,
@@ -108,6 +110,9 @@ export function AssistantMessage({
     ? parseAnthropicStreamedToolCalls(content)
     : undefined;
   const openUiCode = getOpenUiLang(contentString);
+  if (contentString.trim() === NO_PROACTIVE_RESPONSE) {
+    return null;
+  }
 
   const hasToolCalls =
     message &&

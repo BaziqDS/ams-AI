@@ -224,8 +224,10 @@ const selectFromSqlDatabase = tool(
       "password hashes, sessions, tokens, or tracing/request logs. " +
       "For data modifications you MUST use the frontend tools " +
       "(set_form_values, request_form_submit, or an allowed registered page action) so the user reviews and " +
-      "approves the change through the AMS UI. Call sql_db_list_tables and sql_db_schema " +
-      "first if you need to discover what to query.",
+      "approves the change through the AMS UI. Do not guess table names or column names. " +
+      "For broad database questions, call sql_db_list_tables, then sql_db_schema for every " +
+      "business table in the query before calling this tool. Include LIMIT for non-aggregate " +
+      "list queries.",
     schema: z.object({
       query: z
         .string()

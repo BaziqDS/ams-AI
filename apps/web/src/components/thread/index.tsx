@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { ReactNode, useEffect, useRef } from "react";
+import { ReactNode, useCallback, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useStreamContext } from "@/providers/Stream";
@@ -8,6 +8,7 @@ import { Button } from "../ui/button";
 import { Checkpoint, Message } from "@langchain/langgraph-sdk";
 import { AssistantMessage, AssistantMessageLoading } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
+import { getContentString } from "./utils";
 import {
   DO_NOT_RENDER_ID_PREFIX,
   ensureToolCallsHaveResponses,
@@ -35,7 +36,119 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "../ui/tooltip";
-import { copilotBridge } from "@/lib/copilot-bridge";
+import {
+  COPILOT_CONTEXT_EVENT,
+  COPILOT_HITL_DECISION_EVENT,
+  COPILOT_SUPPORT_NUDGE_EVENT,
+  COPILOT_VOICE_COMMAND_EVENT,
+  copilotBridge,
+  type HitlDecision,
+  type PageContext,
+  type SupportNudge,
+  type VoiceCommand,
+} from "@/lib/copilot-bridge";
+import {
+  buildHitlResume,
+  isHitlInterruptSchema,
+} from "@/lib/hitl-interrupt";
+import { buildVoiceCommandPrompt } from "@/lib/voice-command";
+
+const NO_PROACTIVE_RESPONSE = "__AMS_NO_PROACTIVE_RESPONSE__";
+
+function notifyParentAssistantMessage(
+  messageId: string | undefined,
+  text: string,
+) {
+  if (!messageId || typeof window === "undefined" || window.parent === window) return;
+  window.parent.postMessage(
+    {
+      source: "ams-copilot-iframe",
+      type: "ASSISTANT_MESSAGE",
+      messageId,
+      text,
+    },
+    "*",
+  );
+}
+
+function notifyParentHitlInterrupt(value: unknown) {
+  if (typeof window === "undefined" || window.parent === window) return;
+  if (isHitlInterruptSchema(value)) {
+    window.parent.postMessage(
+      {
+        source: "ams-copilot-iframe",
+        type: "HITL_INTERRUPT",
+        interrupt: value,
+      },
+      "*",
+    );
+    return;
+  }
+
+  window.parent.postMessage(
+    {
+      source: "ams-copilot-iframe",
+      type: "HITL_INTERRUPT_CLEARED",
+    },
+    "*",
+  );
+}
+
+function readPathname(context: PageContext | null): string | null {
+  const runtime = context?.readables.find(
+    (readable) => readable.id === "__ams_runtime_context",
+  )?.value as { route?: { pathname?: unknown } } | undefined;
+  return typeof runtime?.route?.pathname === "string"
+    ? runtime.route.pathname
+    : null;
+}
+
+function formatRouteLabel(pathname: string | null): string {
+  if (!pathname) return "AMS page selected";
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments.length === 0) return "Overview selected";
+  const [section, id] = segments;
+  const name = section
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+  return id ? `${name} #${id} selected` : `${name} selected`;
+}
+
+function deriveContextLabel(context: PageContext | null): string | null {
+  const pathname = readPathname(context);
+  if (!context?.readables.length && !pathname) return null;
+
+  const activeForm = context?.readables.find((readable) => {
+    const value = readable.value as { formId?: unknown } | undefined;
+    return typeof value?.formId === "string";
+  })?.value as { formId?: string } | undefined;
+
+  if (activeForm?.formId) {
+    return `${activeForm.formId.replaceAll("_", " ")} active`;
+  }
+
+  const currentList = context?.readables.find((readable) => {
+    const value = readable.value as
+      | { route?: unknown; visible_rows?: unknown[]; filtered_total?: unknown }
+      | undefined;
+    return (
+      typeof value?.route === "string" &&
+      value.route === pathname &&
+      Array.isArray(value.visible_rows)
+    );
+  })?.value as { visible_rows?: unknown[]; filtered_total?: unknown } | undefined;
+
+  if (currentList?.visible_rows) {
+    const count =
+      typeof currentList.filtered_total === "number"
+        ? currentList.filtered_total
+        : currentList.visible_rows.length;
+    return `${formatRouteLabel(pathname)} · ${count} visible`;
+  }
+
+  return formatRouteLabel(pathname);
+}
 
 function StickyToBottomContent(props: {
   content: ReactNode;
@@ -107,6 +220,7 @@ export function Thread() {
     parseAsBoolean.withDefault(false),
   );
   const [input, setInput] = useState("");
+  const [contextLabel, setContextLabel] = useState<string | null>(null);
   const [firstTokenReceived, setFirstTokenReceived] = useState(false);
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
 
@@ -115,6 +229,30 @@ export function Thread() {
   const isLoading = stream.isLoading;
 
   const lastError = useRef<string | undefined>(undefined);
+  const pendingSupportNudgeRef = useRef<SupportNudge | null>(null);
+  const pendingVoiceCommandRef = useRef<VoiceCommand | null>(null);
+  const handledSupportNudgeIdsRef = useRef(new Set<string>());
+  const handledVoiceCommandIdsRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    let mounted = true;
+    copilotBridge.getFreshContext().then((context) => {
+      if (mounted) {
+        setContextLabel(deriveContextLabel(context));
+      }
+    });
+
+    const onContextUpdate = (event: Event) => {
+      const context = (event as CustomEvent<PageContext>).detail;
+      setContextLabel(deriveContextLabel(context));
+    };
+
+    window.addEventListener(COPILOT_CONTEXT_EVENT, onContextUpdate);
+    return () => {
+      mounted = false;
+      window.removeEventListener(COPILOT_CONTEXT_EVENT, onContextUpdate);
+    };
+  }, []);
 
   useEffect(() => {
     if (!stream.error) {
@@ -146,6 +284,7 @@ export function Thread() {
 
   // TODO: this should be part of the useStream hook
   const prevMessageLength = useRef(0);
+  const announcedAssistantMessageIds = useRef(new Set<string>());
   useEffect(() => {
     if (
       messages.length !== prevMessageLength.current &&
@@ -158,15 +297,30 @@ export function Thread() {
     prevMessageLength.current = messages.length;
   }, [messages]);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || isLoading) return;
+  useEffect(() => {
+    const latest = messages[messages.length - 1];
+    if (!latest || latest.type !== "ai" || !latest.id) return;
+    if (announcedAssistantMessageIds.current.has(latest.id)) return;
+
+    const contentString = getContentString(latest.content ?? []);
+    if (!contentString.trim() || contentString.trim() === NO_PROACTIVE_RESPONSE) return;
+
+    announcedAssistantMessageIds.current.add(latest.id);
+    notifyParentAssistantMessage(latest.id, contentString);
+  }, [messages]);
+
+  const submitUserText = useCallback(async (
+    text: string,
+    options: { hidden?: boolean } = {},
+  ) => {
+    const trimmed = text.trim();
+    if (!trimmed || stream.isLoading) return;
     setFirstTokenReceived(false);
 
     const newHumanMessage: Message = {
-      id: uuidv4(),
+      id: `${options.hidden ? DO_NOT_RENDER_ID_PREFIX : ""}${uuidv4()}`,
       type: "human",
-      content: input,
+      content: trimmed,
     };
 
     const toolMessages = ensureToolCallsHaveResponses(stream.messages);
@@ -195,6 +349,115 @@ export function Thread() {
         }),
       },
     );
+  }, [stream]);
+
+  const submitSupportNudge = useCallback(async (nudge: SupportNudge) => {
+    const content = [
+      "AMS_PROACTIVE_UPDATE_EVENT",
+      "This is a hidden application update, not a direct user message.",
+      "Use the current chat history and LIVE PAGE STATE to decide whether a proactive assistant response would help the user right now.",
+      "If a response is useful, return concise valid OpenUI with the best next action. If no response is useful or this is duplicate/noisy, return exactly __AMS_NO_PROACTIVE_RESPONSE__.",
+      `Event JSON: ${JSON.stringify(nudge)}`,
+    ].join("\n");
+    await submitUserText(content, { hidden: true });
+  }, [submitUserText]);
+
+  useEffect(() => {
+    const onSupportNudge = (event: Event) => {
+      const nudge = (event as CustomEvent<SupportNudge>).detail;
+      if (!nudge?.id || handledSupportNudgeIdsRef.current.has(nudge.id)) return;
+      handledSupportNudgeIdsRef.current.add(nudge.id);
+
+      if (stream.isLoading) {
+        pendingSupportNudgeRef.current = nudge;
+        return;
+      }
+
+      void submitSupportNudge(nudge);
+    };
+
+    window.addEventListener(COPILOT_SUPPORT_NUDGE_EVENT, onSupportNudge);
+    return () => {
+      window.removeEventListener(COPILOT_SUPPORT_NUDGE_EVENT, onSupportNudge);
+    };
+  }, [stream.isLoading, submitSupportNudge]);
+
+  useEffect(() => {
+    if (stream.isLoading || !pendingSupportNudgeRef.current) return;
+    const nudge = pendingSupportNudgeRef.current;
+    pendingSupportNudgeRef.current = null;
+    void submitSupportNudge(nudge);
+  }, [stream.isLoading, submitSupportNudge]);
+
+  const submitVoiceCommand = useCallback(async (command: VoiceCommand) => {
+    await submitUserText(buildVoiceCommandPrompt(command.text), { hidden: true });
+  }, [submitUserText]);
+
+  useEffect(() => {
+    const onVoiceCommand = (event: Event) => {
+      const command = (event as CustomEvent<VoiceCommand>).detail;
+      if (!command?.id || handledVoiceCommandIdsRef.current.has(command.id)) return;
+      handledVoiceCommandIdsRef.current.add(command.id);
+
+      if (stream.isLoading) {
+        pendingVoiceCommandRef.current = command;
+        return;
+      }
+
+      void submitVoiceCommand(command);
+    };
+
+    window.addEventListener(COPILOT_VOICE_COMMAND_EVENT, onVoiceCommand);
+    return () => {
+      window.removeEventListener(COPILOT_VOICE_COMMAND_EVENT, onVoiceCommand);
+    };
+  }, [stream.isLoading, submitVoiceCommand]);
+
+  useEffect(() => {
+    if (stream.isLoading || !pendingVoiceCommandRef.current) return;
+    const command = pendingVoiceCommandRef.current;
+    pendingVoiceCommandRef.current = null;
+    void submitVoiceCommand(command);
+  }, [stream.isLoading, submitVoiceCommand]);
+
+  useEffect(() => {
+    notifyParentHitlInterrupt(stream.interrupt?.value);
+  }, [stream.interrupt?.value]);
+
+  useEffect(() => {
+    const onHitlDecision = async (event: Event) => {
+      const { decision } = (event as CustomEvent<HitlDecision>).detail ?? {};
+      if (decision !== "approve" && decision !== "reject") return;
+      if (stream.isLoading) return;
+      if (!isHitlInterruptSchema(stream.interrupt?.value)) return;
+
+      const pageContext = await copilotBridge.getFreshContext();
+      stream.submit(
+        {},
+        {
+          command: {
+            resume: buildHitlResume(stream.interrupt.value, decision),
+          },
+          config: {
+            configurable: {
+              pageContext,
+            },
+          },
+          streamMode: ["values", "custom"],
+        },
+      );
+    };
+
+    window.addEventListener(COPILOT_HITL_DECISION_EVENT, onHitlDecision);
+    return () => {
+      window.removeEventListener(COPILOT_HITL_DECISION_EVENT, onHitlDecision);
+    };
+  }, [stream]);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isLoading) return;
+    await submitUserText(input);
 
     setInput("");
   };
@@ -426,6 +689,12 @@ export function Thread() {
                 <ScrollToBottom className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 animate-in fade-in-0 zoom-in-95" />
 
                 <div className="bg-muted rounded-2xl border shadow-xs mx-auto mb-8 w-full max-w-3xl relative z-10">
+                  {contextLabel ? (
+                    <div className="ams-context-chip" aria-label="Current AI context">
+                      <span className="ams-context-chip-dot" aria-hidden="true" />
+                      <span className="ams-context-chip-text">{contextLabel}</span>
+                    </div>
+                  ) : null}
                   <form
                     onSubmit={handleSubmit}
                     className="grid grid-rows-[1fr_auto] gap-2 max-w-3xl mx-auto"
