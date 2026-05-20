@@ -154,8 +154,8 @@ test("prompt continues after navigation or form-open actions with refreshed page
     /After a frontend action navigates, opens a form, or changes which form is active/i
   );
   assert.match(SYSTEM_PROMPT_TEMPLATE, /refreshed LIVE PAGE STATE/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /continue the same user task/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /Do not stop just to ask the user to continue/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /only current page\/form context/i);
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /ask the user to say "continue"/i);
 });
 
 test("prompt lets the agent triage hidden proactive update events", () => {
