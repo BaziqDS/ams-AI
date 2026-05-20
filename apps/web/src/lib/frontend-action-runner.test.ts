@@ -3,11 +3,6 @@ import test from "node:test";
 import { runFrontendActionInterrupt } from "./frontend-action-runner";
 import type { FrontendActionInterrupt } from "./frontend-action-interrupt";
 
-const originalSetTimeout = globalThis.setTimeout;
-globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
-  return originalSetTimeout(handler, timeout === 250 ? 0 : timeout, ...args);
-}) as typeof setTimeout;
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -74,13 +69,14 @@ test("frontend action runner resumes the agent even after the view stops accepti
   ]);
 });
 
-test("frontend action runner waits for changed page context before resuming", async () => {
+test("frontend action runner resumes with the fresh context provided after the frontend action resolves", async () => {
   const submitCalls: unknown[] = [];
-  const contexts = [
-    { readables: [{ id: "__ams_runtime_context", value: { route: "/categories" } }], actions: [] },
-    { readables: [{ id: "__ams_runtime_context", value: { route: "/categories" } }], actions: [] },
-    { readables: [{ id: "__ams_runtime_context", value: { route: "/inspections/13" } }], actions: [] },
-  ];
+  const pageContext = {
+    readables: [
+      { id: "__ams_runtime_context", value: { route: { pathname: "/inspections/13" } } },
+    ],
+    actions: [],
+  };
 
   const interrupt: FrontendActionInterrupt = {
     type: "frontend_action_request",
@@ -91,8 +87,12 @@ test("frontend action runner waits for changed page context before resuming", as
   };
 
   await runFrontendActionInterrupt(interrupt, {
-    callAction: async () => ({ ok: true }),
-    getFreshContext: async () => contexts.shift() ?? contexts[contexts.length - 1],
+    callAction: async () => ({
+      ok: true,
+      contextReady: true,
+      contextSummary: { route: "/inspections/13" },
+    }),
+    getFreshContext: async () => pageContext,
     submit: (...args: unknown[]) => {
       submitCalls.push(args);
     },
@@ -102,28 +102,13 @@ test("frontend action runner waits for changed page context before resuming", as
   assert.deepEqual(
     (submitCalls[0] as Array<{ config?: { configurable?: { pageContext?: unknown } } }>)[1]
       .config?.configurable?.pageContext,
-    { readables: [{ id: "__ams_runtime_context", value: { route: "/inspections/13" } }], actions: [] },
+    pageContext,
   );
 });
 
-test("frontend action runner waits for listing visible rows after listing navigation", async () => {
+test("frontend action runner passes context-not-ready action results back to the agent", async () => {
   const submitCalls: unknown[] = [];
-  const routeOnly = {
-    readables: [{ id: "__ams_runtime_context", value: { route: "/inspections" } }],
-    actions: [],
-  };
-  const withRows = {
-    readables: [
-      { id: "__ams_runtime_context", value: { route: "/inspections" } },
-      {
-        id: "inspection-list",
-        description: "Inspections displayed on this page",
-        value: { visible_rows: [{ id: 13, detail_route: "/inspections/13" }] },
-      },
-    ],
-    actions: [],
-  };
-  const contexts = [routeOnly, routeOnly, withRows];
+  const pageContext = { readables: [], actions: [] };
 
   await runFrontendActionInterrupt(
     {
@@ -134,8 +119,13 @@ test("frontend action runner waits for listing visible rows after listing naviga
       },
     },
     {
-      callAction: async () => ({ ok: true }),
-      getFreshContext: async () => contexts.shift() ?? withRows,
+      callAction: async () => ({
+        ok: false,
+        errorType: "context_not_ready",
+        message: 'Page context was not ready. Expected route "/inspections" with visible_rows.',
+        contextReady: false,
+      }),
+      getFreshContext: async () => pageContext,
       submit: (...args: unknown[]) => {
         submitCalls.push(args);
       },
@@ -143,93 +133,8 @@ test("frontend action runner waits for listing visible rows after listing naviga
   );
 
   assert.equal(submitCalls.length, 1);
-  assert.deepEqual(
-    (submitCalls[0] as Array<{ config?: { configurable?: { pageContext?: unknown } } }>)[1]
-      .config?.configurable?.pageContext,
-    withRows,
-  );
-});
-
-test("frontend action runner waits for active form fields after opening a form", async () => {
-  const submitCalls: unknown[] = [];
-  const noForm = {
-    readables: [{ id: "__ams_runtime_context", value: { route: "/categories" } }],
-    actions: [],
-  };
-  const formWithoutFields = {
-    readables: [
-      { id: "__ams_runtime_context", value: { route: "/categories" } },
-      { id: "category-form", value: { formId: "category_create", fields: [] } },
-    ],
-    actions: [],
-  };
-  const readyForm = {
-    readables: [
-      { id: "__ams_runtime_context", value: { route: "/categories" } },
-      {
-        id: "category-form",
-        value: {
-          formId: "category_create",
-          fields: [{ name: "name", type: "string" }],
-        },
-      },
-    ],
-    actions: [],
-  };
-  const contexts = [noForm, formWithoutFields, readyForm];
-
-  await runFrontendActionInterrupt(
-    {
-      type: "frontend_action_request",
-      action: {
-        name: "open_form",
-        args: { form_id: "category_create" },
-      },
-    },
-    {
-      callAction: async () => ({ ok: true }),
-      getFreshContext: async () => contexts.shift() ?? readyForm,
-      submit: (...args: unknown[]) => {
-        submitCalls.push(args);
-      },
-    },
-  );
-
-  assert.equal(submitCalls.length, 1);
-  assert.deepEqual(
-    (submitCalls[0] as Array<{ config?: { configurable?: { pageContext?: unknown } } }>)[1]
-      .config?.configurable?.pageContext,
-    readyForm,
-  );
-});
-
-test("frontend action runner fails instead of resuming with stale listing context", async () => {
-  const submitCalls: unknown[] = [];
-  const staleContext = {
-    readables: [{ id: "__ams_runtime_context", value: { route: "/maintenance" } }],
-    actions: [],
-  };
-
-  await runFrontendActionInterrupt(
-    {
-      type: "frontend_action_request",
-      action: {
-        name: "navigate_to_route",
-        args: { path: "/inspections" },
-      },
-    },
-    {
-      callAction: async () => ({ ok: true, route: "/inspections" }),
-      getFreshContext: async () => staleContext,
-      submit: (...args: unknown[]) => {
-        submitCalls.push(args);
-      },
-    },
-  );
-
-  assert.equal(submitCalls.length, 1);
-  const resume = (submitCalls[0] as Array<{ command?: { resume?: { ok?: boolean; error?: string } } }>)[1]
+  const resume = (submitCalls[0] as Array<{ command?: { resume?: { ok?: boolean; result?: { errorType?: string } } } }>)[1]
     .command?.resume;
-  assert.equal(resume?.ok, false);
-  assert.match(resume?.error ?? "", /route "\/inspections" with visible_rows/);
+  assert.equal(resume?.ok, true);
+  assert.equal(resume?.result?.errorType, "context_not_ready");
 });

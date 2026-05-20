@@ -77,6 +77,7 @@ export const COPILOT_CONTEXT_EVENT = "ams-copilot-context-update";
 export const COPILOT_SUPPORT_NUDGE_EVENT = "ams-copilot-support-nudge";
 export const COPILOT_VOICE_COMMAND_EVENT = "ams-copilot-voice-command";
 export const COPILOT_HITL_DECISION_EVENT = "ams-copilot-hitl-decision";
+const FRONTEND_ACTION_TIMEOUT_MS = 15_000;
 
 const TRUSTED_PARENT_ORIGIN = process.env.NEXT_PUBLIC_AMS_ORIGIN?.replace(
   /\/$/,
@@ -256,7 +257,7 @@ export class CopilotBridge {
           this.pendingCalls.delete(callId);
           reject(new Error(`Frontend action "${name}" timed out`));
         }
-      }, 10_000);
+      }, FRONTEND_ACTION_TIMEOUT_MS);
 
       this.pendingCalls.set(callId, { resolve, reject, timer });
       window.parent.postMessage(
