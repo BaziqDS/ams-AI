@@ -74,14 +74,14 @@ test("frontend action runner waits for changed page context before resuming", as
   const contexts = [
     { readables: [{ id: "__ams_runtime_context", value: { route: "/categories" } }], actions: [] },
     { readables: [{ id: "__ams_runtime_context", value: { route: "/categories" } }], actions: [] },
-    { readables: [{ id: "__ams_runtime_context", value: { route: "/inspections" } }], actions: [] },
+    { readables: [{ id: "__ams_runtime_context", value: { route: "/inspections/13" } }], actions: [] },
   ];
 
   const interrupt: FrontendActionInterrupt = {
     type: "frontend_action_request",
     action: {
-      name: "open_form",
-      args: { form_id: "inspection_create" },
+      name: "navigate_to_route",
+      args: { path: "/inspections/13" },
     },
   };
 
@@ -97,6 +97,103 @@ test("frontend action runner waits for changed page context before resuming", as
   assert.deepEqual(
     (submitCalls[0] as Array<{ config?: { configurable?: { pageContext?: unknown } } }>)[1]
       .config?.configurable?.pageContext,
-    { readables: [{ id: "__ams_runtime_context", value: { route: "/inspections" } }], actions: [] },
+    { readables: [{ id: "__ams_runtime_context", value: { route: "/inspections/13" } }], actions: [] },
+  );
+});
+
+test("frontend action runner waits for listing visible rows after listing navigation", async () => {
+  const submitCalls: unknown[] = [];
+  const routeOnly = {
+    readables: [{ id: "__ams_runtime_context", value: { route: "/inspections" } }],
+    actions: [],
+  };
+  const withRows = {
+    readables: [
+      { id: "__ams_runtime_context", value: { route: "/inspections" } },
+      {
+        id: "inspection-list",
+        description: "Inspections displayed on this page",
+        value: { visible_rows: [{ id: 13, detail_route: "/inspections/13" }] },
+      },
+    ],
+    actions: [],
+  };
+  const contexts = [routeOnly, routeOnly, withRows];
+
+  await runFrontendActionInterrupt(
+    {
+      type: "frontend_action_request",
+      action: {
+        name: "navigate_to_route",
+        args: { path: "/inspections" },
+      },
+    },
+    {
+      callAction: async () => ({ ok: true }),
+      getFreshContext: async () => contexts.shift() ?? withRows,
+      submit: (...args: unknown[]) => {
+        submitCalls.push(args);
+      },
+    },
+  );
+
+  assert.equal(submitCalls.length, 1);
+  assert.deepEqual(
+    (submitCalls[0] as Array<{ config?: { configurable?: { pageContext?: unknown } } }>)[1]
+      .config?.configurable?.pageContext,
+    withRows,
+  );
+});
+
+test("frontend action runner waits for active form fields after opening a form", async () => {
+  const submitCalls: unknown[] = [];
+  const noForm = {
+    readables: [{ id: "__ams_runtime_context", value: { route: "/categories" } }],
+    actions: [],
+  };
+  const formWithoutFields = {
+    readables: [
+      { id: "__ams_runtime_context", value: { route: "/categories" } },
+      { id: "category-form", value: { formId: "category_create", fields: [] } },
+    ],
+    actions: [],
+  };
+  const readyForm = {
+    readables: [
+      { id: "__ams_runtime_context", value: { route: "/categories" } },
+      {
+        id: "category-form",
+        value: {
+          formId: "category_create",
+          fields: [{ name: "name", type: "string" }],
+        },
+      },
+    ],
+    actions: [],
+  };
+  const contexts = [noForm, formWithoutFields, readyForm];
+
+  await runFrontendActionInterrupt(
+    {
+      type: "frontend_action_request",
+      action: {
+        name: "open_form",
+        args: { form_id: "category_create" },
+      },
+    },
+    {
+      callAction: async () => ({ ok: true }),
+      getFreshContext: async () => contexts.shift() ?? readyForm,
+      submit: (...args: unknown[]) => {
+        submitCalls.push(args);
+      },
+    },
+  );
+
+  assert.equal(submitCalls.length, 1);
+  assert.deepEqual(
+    (submitCalls[0] as Array<{ config?: { configurable?: { pageContext?: unknown } } }>)[1]
+      .config?.configurable?.pageContext,
+    readyForm,
   );
 });
