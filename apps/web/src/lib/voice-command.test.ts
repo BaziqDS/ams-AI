@@ -12,3 +12,13 @@ test("voice command prompt tells the agent to act without requiring the chat pan
   assert.match(prompt, /open_form/i);
   assert.match(prompt, /create an inspection/);
 });
+
+test("voice command prompt keeps Urdu input understandable but fills forms in English", () => {
+  const prompt = buildVoiceCommandPrompt("جامع مسجد کے لیے inspection بناؤ");
+
+  assert.match(prompt, /Urdu, Roman Urdu, or English/i);
+  assert.match(prompt, /set_form_values/i);
+  assert.match(prompt, /English\/Latin script/i);
+  assert.match(prompt, /Jamia Masjid/i);
+  assert.match(prompt, /جامع مسجد/);
+});
