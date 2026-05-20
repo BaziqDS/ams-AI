@@ -28,7 +28,8 @@ export type FrontendActionRunnerDeps = {
   onStatus?: (status: FrontendActionStatus, message: string) => void;
 };
 
-const CONTEXT_READY_ATTEMPTS = 10;
+const CONTEXT_READY_ATTEMPTS = 12;
+const CONTEXT_READY_RETRY_DELAY_MS = 250;
 
 function contextFingerprint(context: unknown) {
   try {
@@ -126,6 +127,43 @@ function contextIsReadyForAction(
   return true;
 }
 
+function actionRequiresReadyContext(action: FrontendActionInterrupt["action"]) {
+  return (
+    action.name === "navigate_to_route" ||
+    action.name === "open_form" ||
+    (action.name.startsWith("open_create_") && action.name.endsWith("_form"))
+  );
+}
+
+function readinessDescription(action: FrontendActionInterrupt["action"]) {
+  const args = readActionArgs(action.args);
+
+  if (action.name === "open_form") {
+    const formId = args.form_id ?? args.formId;
+    return typeof formId === "string"
+      ? `active form "${formId}" with writable fields`
+      : "an active form with writable fields";
+  }
+
+  if (action.name.startsWith("open_create_") && action.name.endsWith("_form")) {
+    return "an active create form with writable fields";
+  }
+
+  if (action.name === "navigate_to_route") {
+    const target = args.path ?? args.route;
+    if (typeof target === "string" && isListingRoute(target)) {
+      return `route "${target}" with visible_rows`;
+    }
+    if (typeof target === "string") return `route "${target}"`;
+  }
+
+  return "fresh page context";
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function waitForFreshActionContext(
   deps: FrontendActionRunnerDeps,
   action: FrontendActionInterrupt["action"],
@@ -133,15 +171,25 @@ async function waitForFreshActionContext(
 ) {
   const before = contextFingerprint(beforeContext);
   let latest = beforeContext;
+  const requiresReadyContext = actionRequiresReadyContext(action);
 
   for (let attempt = 0; attempt < CONTEXT_READY_ATTEMPTS; attempt += 1) {
     latest = await deps.getFreshContext();
+    if (!requiresReadyContext) return latest;
     if (
       contextFingerprint(latest) !== before &&
       contextIsReadyForAction(action, latest)
     ) {
       return latest;
     }
+    await delay(CONTEXT_READY_RETRY_DELAY_MS);
+  }
+
+  if (requiresReadyContext) {
+    throw new Error(
+      `Page context was not ready after frontend action "${action.name}". ` +
+        `Expected ${readinessDescription(action)} before resuming the agent.`,
+    );
   }
 
   return latest;

@@ -3,6 +3,11 @@ import test from "node:test";
 import { runFrontendActionInterrupt } from "./frontend-action-runner";
 import type { FrontendActionInterrupt } from "./frontend-action-interrupt";
 
+const originalSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+  return originalSetTimeout(handler, timeout === 250 ? 0 : timeout, ...args);
+}) as typeof setTimeout;
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -196,4 +201,35 @@ test("frontend action runner waits for active form fields after opening a form",
       .config?.configurable?.pageContext,
     readyForm,
   );
+});
+
+test("frontend action runner fails instead of resuming with stale listing context", async () => {
+  const submitCalls: unknown[] = [];
+  const staleContext = {
+    readables: [{ id: "__ams_runtime_context", value: { route: "/maintenance" } }],
+    actions: [],
+  };
+
+  await runFrontendActionInterrupt(
+    {
+      type: "frontend_action_request",
+      action: {
+        name: "navigate_to_route",
+        args: { path: "/inspections" },
+      },
+    },
+    {
+      callAction: async () => ({ ok: true, route: "/inspections" }),
+      getFreshContext: async () => staleContext,
+      submit: (...args: unknown[]) => {
+        submitCalls.push(args);
+      },
+    },
+  );
+
+  assert.equal(submitCalls.length, 1);
+  const resume = (submitCalls[0] as Array<{ command?: { resume?: { ok?: boolean; error?: string } } }>)[1]
+    .command?.resume;
+  assert.equal(resume?.ok, false);
+  assert.match(resume?.error ?? "", /route "\/inspections" with visible_rows/);
 });
