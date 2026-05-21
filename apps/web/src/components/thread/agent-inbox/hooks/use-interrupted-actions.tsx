@@ -13,6 +13,8 @@ import { toast } from "sonner";
 import { HumanInterrupt, HumanResponse } from "@langchain/langgraph/prebuilt";
 import { END } from "@langchain/langgraph/web";
 import { useStreamContext } from "@/providers/Stream";
+import { copilotBridge } from "@/lib/copilot-bridge";
+import { buildAgentRunConfig } from "@/lib/agent-run-config";
 
 interface UseInterruptedActionsInput {
   interrupt: HumanInterrupt;
@@ -80,14 +82,20 @@ export default function useInterruptedActions({
     }
   }, [interrupt]);
 
-  const resumeRun = (response: HumanResponse[]): boolean => {
+  const resumeRun = async (response: HumanResponse[]): Promise<boolean> => {
     try {
+      const pageContext = await copilotBridge.getFreshContext({
+        timeoutMs: 5000,
+        requireFresh: true,
+      });
       thread.submit(
         {},
         {
           command: {
             resume: response,
           },
+          config: buildAgentRunConfig(pageContext),
+          streamMode: ["values", "custom"],
         },
       );
       return true;
@@ -162,7 +170,7 @@ export default function useInterruptedActions({
 
         setLoading(true);
         setStreaming(true);
-        const resumedSuccessfully = resumeRun([input]);
+        const resumedSuccessfully = await resumeRun([input]);
         if (!resumedSuccessfully) {
           // This will only be undefined if the graph ID is not found
           // in this case, the method will trigger a toast for us.
@@ -208,7 +216,7 @@ export default function useInterruptedActions({
       }
     } else {
       setLoading(true);
-      resumeRun(humanResponse);
+      await resumeRun(humanResponse);
 
       toast("Success", {
         description: "Response submitted successfully.",
@@ -236,7 +244,7 @@ export default function useInterruptedActions({
     setLoading(true);
     initialHumanInterruptEditValue.current = {};
 
-    resumeRun([ignoreResponse]);
+    await resumeRun([ignoreResponse]);
 
     setLoading(false);
     toast("Successfully ignored thread", {
@@ -253,12 +261,18 @@ export default function useInterruptedActions({
     initialHumanInterruptEditValue.current = {};
 
     try {
+      const pageContext = await copilotBridge.getFreshContext({
+        timeoutMs: 5000,
+        requireFresh: true,
+      });
       thread.submit(
         {},
         {
           command: {
             goto: END,
           },
+          config: buildAgentRunConfig(pageContext),
+          streamMode: ["values", "custom"],
         },
       );
 

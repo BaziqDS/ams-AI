@@ -1,10 +1,96 @@
 import { AIMessage, ToolMessage } from "@langchain/langgraph-sdk";
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Circle,
+  LoaderCircle,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 
 function isComplexValue(value: any): boolean {
   return Array.isArray(value) || (typeof value === "object" && value !== null);
+}
+
+type TodoToolItem = {
+  id?: string;
+  content?: string;
+  status?: string;
+};
+
+function parseTodoToolArgs(args: unknown): TodoToolItem[] {
+  let parsed = args;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return [];
+    }
+  }
+
+  if (!parsed || typeof parsed !== "object") return [];
+
+  const todos = (parsed as Record<string, unknown>).todos;
+  if (!Array.isArray(todos)) return [];
+
+  return todos.filter(
+    (todo): todo is TodoToolItem => !!todo && typeof todo === "object",
+  );
+}
+
+function TodoToolIcon({ status }: { status: string }) {
+  if (status === "completed") {
+    return <CheckCircle2 className="size-3.5 shrink-0 text-emerald-600" />;
+  }
+
+  if (status === "in_progress") {
+    return <LoaderCircle className="size-3.5 shrink-0 animate-spin text-blue-600" />;
+  }
+
+  return <Circle className="size-3.5 shrink-0 text-gray-400" />;
+}
+
+function TodoToolArgs({ args }: { args: unknown }) {
+  const todos = parseTodoToolArgs(args);
+
+  if (!todos.length) {
+    return <code className="text-xs block p-2">{"{}"}</code>;
+  }
+
+  return (
+    <div className="divide-y divide-gray-200 bg-white">
+      {todos.map((todo, index) => {
+        const status = String(todo.status ?? "pending");
+        return (
+          <div
+            key={todo.id ?? `${todo.content ?? "todo"}-${index}`}
+            className={cn(
+              "flex min-w-0 items-start gap-2 px-3 py-2 text-xs",
+              status === "in_progress" && "bg-blue-50",
+              status === "completed" && "text-gray-500",
+            )}
+          >
+            <TodoToolIcon status={status} />
+            <div className="min-w-0 flex-1">
+              <div
+                className={cn(
+                  "break-words leading-snug",
+                  status === "completed" && "line-through decoration-gray-400",
+                )}
+              >
+                {todo.content ?? "(empty todo)"}
+              </div>
+              <div className="mt-0.5 text-[10px] uppercase text-gray-500">
+                {status.replaceAll("_", " ")}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export function ToolCalls({
@@ -17,7 +103,10 @@ export function ToolCalls({
   return (
     <div className="space-y-2 w-full max-w-full min-w-0 text-xs">
       {toolCalls.map((tc, idx) => {
-        const args = tc.args as Record<string, any>;
+        const args =
+          tc.args && typeof tc.args === "object"
+            ? (tc.args as Record<string, any>)
+            : {};
         const hasArgs = Object.keys(args).length > 0;
         return (
           <div
@@ -34,7 +123,9 @@ export function ToolCalls({
                 )}
               </h3>
             </div>
-            {hasArgs ? (
+            {tc.name === "write_todos" ? (
+              <TodoToolArgs args={args} />
+            ) : hasArgs ? (
               <table className="w-full table-fixed divide-y divide-gray-200">
                 <tbody className="divide-y divide-gray-200">
                   {Object.entries(args).map(([key, value], argIdx) => (

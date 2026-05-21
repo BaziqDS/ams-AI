@@ -1,6 +1,7 @@
 import { parsePartialJson } from "@langchain/core/output_parsers";
 import { v4 as uuidv4 } from "uuid";
 import type { ActionEvent } from "@openuidev/react-lang";
+import { useCallback, useRef } from "react";
 import { useStreamContext } from "@/providers/Stream";
 import { AIMessage, Checkpoint, Message } from "@langchain/langgraph-sdk";
 import { getContentString } from "../utils";
@@ -23,11 +24,24 @@ import {
   getOpenUiLang,
   OpenUiAssistantMessage,
 } from "../openui-message";
-import { ensureToolCallsHaveResponses } from "@/lib/ensure-tool-responses";
+import {
+  DO_NOT_RENDER_ID_PREFIX,
+  ensureToolCallsHaveResponses,
+} from "@/lib/ensure-tool-responses";
 import { copilotBridge } from "@/lib/copilot-bridge";
 import { isAmsRelativeRoute } from "@/lib/ams-route";
+import {
+  buildOpenUiRepairPrompt,
+  openUiDiagnosticKey,
+} from "@/lib/openui-diagnostics";
+import { buildAgentRunConfig } from "@/lib/agent-run-config";
+import { extractModelReasoningTelemetry } from "@/lib/model-reasoning";
 
 const NO_PROACTIVE_RESPONSE = "__AMS_NO_PROACTIVE_RESPONSE__";
+const OPENUI_REPAIR_MAX_PER_PAGE = 3;
+const submittedOpenUiRepairMessageIds = new Set<string>();
+const submittedOpenUiRepairKeys = new Set<string>();
+let submittedOpenUiRepairCount = 0;
 
 function CustomComponent({
   message,
@@ -80,6 +94,37 @@ function parseAnthropicStreamedToolCalls(
   });
 }
 
+function ModelReasoning({ message }: { message: Message | undefined }) {
+  const telemetry = extractModelReasoningTelemetry(message);
+  if (!telemetry) return null;
+
+  const details =
+    telemetry.details === undefined
+      ? null
+      : JSON.stringify(telemetry.details, null, 2);
+
+  return (
+    <details className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+      <summary className="cursor-pointer select-none font-medium text-foreground">
+        Model reasoning
+        {telemetry.reasoningTokens !== undefined
+          ? ` (${telemetry.reasoningTokens} tokens)`
+          : ""}
+      </summary>
+      <div className="mt-2 space-y-2">
+        {telemetry.text ? (
+          <MarkdownText>{telemetry.text}</MarkdownText>
+        ) : null}
+        {details ? (
+          <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded bg-background p-2">
+            {details}
+          </pre>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 export function AssistantMessage({
   message,
   isLoading,
@@ -104,15 +149,15 @@ export function AssistantMessage({
   );
   const meta = message ? thread.getMessagesMetadata(message) : undefined;
   const threadInterrupt = thread.interrupt;
+  const openUiRepairInFlightRef = useRef(false);
 
   const parentCheckpoint = meta?.firstSeenState?.parent_checkpoint;
   const anthropicStreamedToolCalls = Array.isArray(content)
     ? parseAnthropicStreamedToolCalls(content)
     : undefined;
   const openUiCode = getOpenUiLang(contentString);
-  if (contentString.trim() === NO_PROACTIVE_RESPONSE) {
-    return null;
-  }
+  const shouldHideNoProactiveResponse =
+    contentString.trim() === NO_PROACTIVE_RESPONSE;
 
   const hasToolCalls =
     message &&
@@ -127,11 +172,75 @@ export function AssistantMessage({
   const hasAnthropicToolCalls = !!anthropicStreamedToolCalls?.length;
   const isToolResult = message?.type === "tool";
 
+  const submitOpenUiRepair = useCallback(
+    async (diagnostics: string) => {
+      if (
+        !message?.id ||
+        !openUiCode ||
+        !isLastMessage ||
+        isLoading ||
+        thread.isLoading ||
+        openUiRepairInFlightRef.current ||
+        submittedOpenUiRepairCount >= OPENUI_REPAIR_MAX_PER_PAGE
+      ) {
+        return;
+      }
+
+      if (submittedOpenUiRepairMessageIds.has(message.id)) return;
+      const key = openUiDiagnosticKey(message.id, diagnostics);
+      if (submittedOpenUiRepairKeys.has(key)) return;
+      submittedOpenUiRepairMessageIds.add(message.id);
+      submittedOpenUiRepairKeys.add(key);
+      submittedOpenUiRepairCount += 1;
+      openUiRepairInFlightRef.current = true;
+
+      const newHumanMessage: Message = {
+        id: `${DO_NOT_RENDER_ID_PREFIX}${uuidv4()}`,
+        type: "human",
+        content: buildOpenUiRepairPrompt({
+          diagnostics,
+          code: openUiCode,
+        }),
+      };
+
+      try {
+        const toolMessages = ensureToolCallsHaveResponses(thread.messages);
+        const pageContext = await copilotBridge.getFreshContext({
+          timeoutMs: 5000,
+          requireFresh: true,
+        });
+        thread.submit(
+          { messages: [...toolMessages, newHumanMessage] },
+          {
+            streamMode: ["values", "custom"],
+            config: buildAgentRunConfig(pageContext),
+            optimisticValues: (prev) => ({
+              ...prev,
+              messages: [
+                ...(prev.messages ?? []),
+                ...toolMessages,
+                newHumanMessage,
+              ],
+            }),
+          },
+        );
+      } finally {
+        openUiRepairInFlightRef.current = false;
+      }
+    },
+    [isLastMessage, isLoading, message?.id, openUiCode, thread],
+  );
+
   const handleOpenUiAction = async (event: ActionEvent) => {
     const action = event as ActionEvent & {
       humanFriendlyMessage?: string;
       message?: string;
-      params?: { url?: string; message?: string };
+      params?: {
+        url?: string;
+        message?: string;
+        name?: string;
+        args?: Record<string, unknown>;
+      };
       formState?: Record<string, unknown>;
     };
 
@@ -145,6 +254,22 @@ export function AssistantMessage({
         return;
       }
       window.open(action.params.url, "_blank", "noopener,noreferrer");
+      return;
+    }
+
+    const frontendActionName =
+      action.type === "frontend_action" || action.type === "run_frontend_action"
+        ? action.params?.name
+        : undefined;
+    if (frontendActionName) {
+      try {
+        await copilotBridge.callAction(
+          frontendActionName,
+          action.params?.args ?? {},
+        );
+      } catch (error) {
+        console.warn("[copilot/openui] frontend action failed:", error);
+      }
       return;
     }
 
@@ -195,16 +320,15 @@ export function AssistantMessage({
     };
 
     const toolMessages = ensureToolCallsHaveResponses(thread.messages);
-    const pageContext = await copilotBridge.getFreshContext();
+    const pageContext = await copilotBridge.getFreshContext({
+      timeoutMs: 5000,
+      requireFresh: true,
+    });
     thread.submit(
       { messages: [...toolMessages, newHumanMessage] },
       {
         streamMode: ["values", "custom"],
-        config: {
-          configurable: {
-            pageContext,
-          },
-        },
+        config: buildAgentRunConfig(pageContext),
         optimisticValues: (prev) => ({
           ...prev,
           messages: [
@@ -216,6 +340,10 @@ export function AssistantMessage({
       },
     );
   };
+
+  if (shouldHideNoProactiveResponse) {
+    return null;
+  }
 
   if (isToolResult && hideToolCalls) {
     return null;
@@ -247,12 +375,15 @@ export function AssistantMessage({
               }
               isStreaming={isLoading && isLastMessage}
               onAction={handleOpenUiAction}
+              onDiagnostics={submitOpenUiRepair}
             />
           ) : contentString.length > 0 ? (
             <div className="py-1">
               <MarkdownText>{contentString}</MarkdownText>
             </div>
           ) : null}
+
+          <ModelReasoning message={message} />
 
           {!hideToolCalls && (
             <>

@@ -71,6 +71,9 @@ test("prompt only names registered frontend form tools", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /set_form_values/);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /Writable field schema/);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /read-only context/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /one valid JSON object/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /NEVER pass an array directly as values/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /"values":\{"items":\[/);
   assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /set_fields/);
   assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /set_inspection_items/);
 });
@@ -93,6 +96,12 @@ test("prompt requires complete required field groups on inspection stages", () =
   assert.match(SYSTEM_PROMPT_TEMPLATE, /fill all required sibling fields/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /central_register_page_no/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /stock_register_page_no/i);
+});
+
+test("prompt stops repeated form retry loops before hitting graph recursion limits", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /LOOP GUARD/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /after two failed attempts/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /stop retrying tools/i);
 });
 
 test("prompt distinguishes current inspection stage from next transition", () => {
@@ -122,6 +131,15 @@ test("prompt tells the agent to use detail page context before SQL", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /before SQL/i);
 });
 
+test("prompt keeps page readable contracts generic instead of enumerating route schemas", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /route-scoped readables/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /visible_rows/i);
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /On \/inspections, a readable contains/i);
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /On \/items, a readable contains/i);
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /On \/categories, a readable contains/i);
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /On \/locations, a readable contains/i);
+});
+
 test("prompt forbids answering current-page references from stale route memory", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /matching detail or list context/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /do not answer from older route/i);
@@ -148,6 +166,13 @@ test("prompt forbids invalid inline OpenUI variable assignments", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /include every defined variable/i);
 });
 
+test("prompt supports OpenUI renderer repair without exposing renderer-only tools", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /OPENUI_RENDERER_REPAIR_REQUEST/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /Do not call get_page_context/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /not an agent tool/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /@ToAssistant/);
+});
+
 test("prompt continues after navigation or form-open actions with refreshed page context", () => {
   assert.match(
     SYSTEM_PROMPT_TEMPLATE,
@@ -155,11 +180,47 @@ test("prompt continues after navigation or form-open actions with refreshed page
   );
   assert.match(SYSTEM_PROMPT_TEMPLATE, /refreshed LIVE PAGE STATE/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /only current page\/form context/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /continue from the refreshed LIVE PAGE STATE/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /fill it immediately with set_form_values/i);
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /wait for fresh page context/i);
   assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /ask the user to say "continue"/i);
 });
 
-test("prompt lets the agent triage hidden proactive update events", () => {
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /AMS_PROACTIVE_UPDATE_EVENT/);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /decide whether a proactive response would actually help/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /__AMS_NO_PROACTIVE_RESPONSE__/);
+test("prompt includes a compact generated module manifest for routing and form opens", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /AMS COPILOT MODULE MANIFEST \(COMPACT\)/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /live page state is authoritative/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /inspection_create/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /\/inspections\/\{id\}/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /category_create/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /subcategory_create/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /\/categories\/\{id\}/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /item_create/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /\/items\/\{id\}/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /stock_entry_create/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /\/stock-entries\/\{id\}/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /stock_register_create/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /\/stock-registers\/\{id\}/);
+});
+
+test("module manifest section does not hardcode page data or workflow details", () => {
+  const manifestSection = SYSTEM_PROMPT_TEMPLATE.match(
+    /AMS COPILOT MODULE MANIFEST \(COMPACT\):[\s\S]*?Production rule:/i,
+  )?.[0] ?? "";
+
+  assert.match(manifestSection, /inspection_create/);
+  assert.doesNotMatch(manifestSection, /list rows expose/i);
+  assert.doesNotMatch(manifestSection, /workflow shape/i);
+  assert.doesNotMatch(manifestSection, /root\/main university inspections/i);
+  assert.doesNotMatch(manifestSection, /departmental\/non-root inspections/i);
+  assert.doesNotMatch(manifestSection, /items\.N\.stock_register/i);
+  assert.doesNotMatch(manifestSection, /finance_check_date/i);
+});
+
+test("durable prompt keeps only stable category vocabulary outside live page state", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /FIXED_ASSET/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /CONSUMABLE/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /PERISHABLE/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /INDIVIDUAL/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /QUANTITY/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /DETAIL PAGE CONTEXT/i);
 });

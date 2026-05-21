@@ -2,6 +2,7 @@ import {
   buildFrontendActionResume,
   type FrontendActionInterrupt,
 } from "./frontend-action-interrupt";
+import { buildAgentRunConfig } from "./agent-run-config";
 
 type FrontendActionStatus = "running" | "resuming" | "completed" | "failed";
 
@@ -11,11 +12,7 @@ type FrontendActionSubmit = (
     command: {
       resume: ReturnType<typeof buildFrontendActionResume>;
     };
-    config: {
-      configurable: {
-        pageContext: unknown;
-      };
-    };
+    config: ReturnType<typeof buildAgentRunConfig>;
     streamMode: ["values", "custom"];
   },
 ) => void;
@@ -59,11 +56,7 @@ export async function runFrontendActionInterrupt(
         command: {
           resume: buildFrontendActionResume(interrupt, result),
         },
-        config: {
-          configurable: {
-            pageContext,
-          },
-        },
+        config: buildAgentRunConfig(pageContext),
         streamMode: ["values", "custom"],
       },
     );
@@ -74,18 +67,14 @@ export async function runFrontendActionInterrupt(
       "failed",
       error instanceof Error ? error.message : String(error),
     );
-    const pageContext = await deps.getFreshContext();
+    const pageContext = await deps.getFreshContext().catch(() => null);
     deps.submit(
       {},
       {
         command: {
           resume: buildFrontendActionResume(interrupt, undefined, error),
         },
-        config: {
-          configurable: {
-            pageContext,
-          },
-        },
+        config: buildAgentRunConfig(pageContext),
         streamMode: ["values", "custom"],
       },
     );

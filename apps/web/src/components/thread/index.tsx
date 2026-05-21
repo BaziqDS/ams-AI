@@ -13,13 +13,13 @@ import {
   DO_NOT_RENDER_ID_PREFIX,
   ensureToolCallsHaveResponses,
 } from "@/lib/ensure-tool-responses";
-import { LangGraphLogoSVG } from "../icons/langgraph";
 import { TooltipIconButton } from "./tooltip-icon-button";
 import {
   ArrowDown,
   LoaderCircle,
   PanelRightOpen,
   PanelRightClose,
+  Sparkles,
   SquarePen,
 } from "lucide-react";
 import { useQueryState, parseAsBoolean } from "nuqs";
@@ -29,22 +29,13 @@ import { toast } from "sonner";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
-import { GitHubSVG } from "../icons/github";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "../ui/tooltip";
 import {
   COPILOT_CONTEXT_EVENT,
   COPILOT_HITL_DECISION_EVENT,
-  COPILOT_SUPPORT_NUDGE_EVENT,
   COPILOT_VOICE_COMMAND_EVENT,
   copilotBridge,
   type HitlDecision,
   type PageContext,
-  type SupportNudge,
   type VoiceCommand,
 } from "@/lib/copilot-bridge";
 import {
@@ -52,8 +43,13 @@ import {
   isHitlInterruptSchema,
 } from "@/lib/hitl-interrupt";
 import { buildVoiceCommandPrompt } from "@/lib/voice-command";
+import { buildAgentRunConfig } from "@/lib/agent-run-config";
+import { TodosPanel } from "./todos-panel";
 
 const NO_PROACTIVE_RESPONSE = "__AMS_NO_PROACTIVE_RESPONSE__";
+const RESILIENT_STREAM_OPTIONS = {
+  onDisconnect: "continue" as const,
+};
 
 function notifyParentAssistantMessage(
   messageId: string | undefined,
@@ -140,11 +136,13 @@ function deriveContextLabel(context: PageContext | null): string | null {
   })?.value as { visible_rows?: unknown[]; filtered_total?: unknown } | undefined;
 
   if (currentList?.visible_rows) {
-    const count =
-      typeof currentList.filtered_total === "number"
-        ? currentList.filtered_total
-        : currentList.visible_rows.length;
-    return `${formatRouteLabel(pathname)} · ${count} visible`;
+    const visibleCount = currentList.visible_rows.length;
+    const totalText =
+      typeof currentList.filtered_total === "number" &&
+      currentList.filtered_total !== visibleCount
+        ? ` of ${currentList.filtered_total} total`
+        : "";
+    return `${formatRouteLabel(pathname)} · ${visibleCount} visible${totalText}`;
   }
 
   return formatRouteLabel(pathname);
@@ -188,24 +186,15 @@ function ScrollToBottom(props: { className?: string }) {
   );
 }
 
-function OpenGitHubRepo() {
+function AmsAssistantMark({ size = 28 }: { size?: number }) {
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <a
-            href="https://github.com/langchain-ai/agent-chat-ui"
-            target="_blank"
-            className="flex items-center justify-center"
-          >
-            <GitHubSVG width="24" height="24" />
-          </a>
-        </TooltipTrigger>
-        <TooltipContent side="left">
-          <p>Open GitHub repo</p>
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <span
+      className="inline-flex items-center justify-center rounded-md bg-primary text-primary-foreground"
+      style={{ width: size, height: size }}
+      aria-hidden="true"
+    >
+      <Sparkles size={Math.max(16, Math.round(size * 0.58))} strokeWidth={2} />
+    </span>
   );
 }
 
@@ -222,16 +211,17 @@ export function Thread() {
   const [input, setInput] = useState("");
   const [contextLabel, setContextLabel] = useState<string | null>(null);
   const [firstTokenReceived, setFirstTokenReceived] = useState(false);
+  const [showTodos, setShowTodos] = useState(false);
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
 
   const stream = useStreamContext();
   const messages = stream.messages;
   const isLoading = stream.isLoading;
+  const todos = stream.values.todos ?? [];
+  const hasActiveTodo = todos.some((todo) => todo.status === "in_progress");
 
   const lastError = useRef<string | undefined>(undefined);
-  const pendingSupportNudgeRef = useRef<SupportNudge | null>(null);
   const pendingVoiceCommandRef = useRef<VoiceCommand | null>(null);
-  const handledSupportNudgeIdsRef = useRef(new Set<string>());
   const handledVoiceCommandIdsRef = useRef(new Set<string>());
 
   useEffect(() => {
@@ -282,6 +272,12 @@ export function Thread() {
     }
   }, [stream.error]);
 
+  useEffect(() => {
+    if (!hasActiveTodo) {
+      setShowTodos(false);
+    }
+  }, [hasActiveTodo]);
+
   // TODO: this should be part of the useStream hook
   const prevMessageLength = useRef(0);
   const announcedAssistantMessageIds = useRef(new Set<string>());
@@ -324,21 +320,21 @@ export function Thread() {
     };
 
     const toolMessages = ensureToolCallsHaveResponses(stream.messages);
-    const pageContext = await copilotBridge.getFreshContext();
+    const pageContext = await copilotBridge.getFreshContext({
+      timeoutMs: 5000,
+      requireFresh: true,
+    });
 
     stream.submit(
       { messages: [...toolMessages, newHumanMessage] },
       {
+        ...RESILIENT_STREAM_OPTIONS,
         // "custom" is required so dispatchCustomEvent() from tools reaches
         // the client (used for frontend-action plumbing).
         streamMode: ["values", "custom"],
         // Per-invocation context. Read on the agent side by
         // dynamicSystemPromptMiddleware. Not stored in messages, not echoed to UI.
-        config: {
-          configurable: {
-            pageContext,
-          },
-        },
+        config: buildAgentRunConfig(pageContext),
         optimisticValues: (prev) => ({
           ...prev,
           messages: [
@@ -350,44 +346,6 @@ export function Thread() {
       },
     );
   }, [stream]);
-
-  const submitSupportNudge = useCallback(async (nudge: SupportNudge) => {
-    const content = [
-      "AMS_PROACTIVE_UPDATE_EVENT",
-      "This is a hidden application update, not a direct user message.",
-      "Use the current chat history and LIVE PAGE STATE to decide whether a proactive assistant response would help the user right now.",
-      "If a response is useful, return concise valid OpenUI with the best next action. If no response is useful or this is duplicate/noisy, return exactly __AMS_NO_PROACTIVE_RESPONSE__.",
-      `Event JSON: ${JSON.stringify(nudge)}`,
-    ].join("\n");
-    await submitUserText(content, { hidden: true });
-  }, [submitUserText]);
-
-  useEffect(() => {
-    const onSupportNudge = (event: Event) => {
-      const nudge = (event as CustomEvent<SupportNudge>).detail;
-      if (!nudge?.id || handledSupportNudgeIdsRef.current.has(nudge.id)) return;
-      handledSupportNudgeIdsRef.current.add(nudge.id);
-
-      if (stream.isLoading) {
-        pendingSupportNudgeRef.current = nudge;
-        return;
-      }
-
-      void submitSupportNudge(nudge);
-    };
-
-    window.addEventListener(COPILOT_SUPPORT_NUDGE_EVENT, onSupportNudge);
-    return () => {
-      window.removeEventListener(COPILOT_SUPPORT_NUDGE_EVENT, onSupportNudge);
-    };
-  }, [stream.isLoading, submitSupportNudge]);
-
-  useEffect(() => {
-    if (stream.isLoading || !pendingSupportNudgeRef.current) return;
-    const nudge = pendingSupportNudgeRef.current;
-    pendingSupportNudgeRef.current = null;
-    void submitSupportNudge(nudge);
-  }, [stream.isLoading, submitSupportNudge]);
 
   const submitVoiceCommand = useCallback(async (command: VoiceCommand) => {
     await submitUserText(buildVoiceCommandPrompt(command.text), { hidden: true });
@@ -431,18 +389,18 @@ export function Thread() {
       if (stream.isLoading) return;
       if (!isHitlInterruptSchema(stream.interrupt?.value)) return;
 
-      const pageContext = await copilotBridge.getFreshContext();
+      const pageContext = await copilotBridge.getFreshContext({
+        timeoutMs: 5000,
+        requireFresh: true,
+      });
       stream.submit(
         {},
         {
+          ...RESILIENT_STREAM_OPTIONS,
           command: {
             resume: buildHitlResume(stream.interrupt.value, decision),
           },
-          config: {
-            configurable: {
-              pageContext,
-            },
-          },
+          config: buildAgentRunConfig(pageContext),
           streamMode: ["values", "custom"],
         },
       );
@@ -468,15 +426,15 @@ export function Thread() {
     // Do this so the loading state is correct
     prevMessageLength.current = prevMessageLength.current - 1;
     setFirstTokenReceived(false);
-    const pageContext = await copilotBridge.getFreshContext();
+    const pageContext = await copilotBridge.getFreshContext({
+      timeoutMs: 5000,
+      requireFresh: true,
+    });
     stream.submit(undefined, {
+      ...RESILIENT_STREAM_OPTIONS,
       checkpoint: parentCheckpoint,
       streamMode: ["values", "custom"],
-      config: {
-        configurable: {
-          pageContext,
-        },
-      },
+      config: buildAgentRunConfig(pageContext),
     });
   };
 
@@ -548,9 +506,6 @@ export function Thread() {
                 </Button>
               )}
             </div>
-            <div className="absolute top-2 right-4 flex items-center">
-              <OpenGitHubRepo />
-            </div>
           </div>
         )}
         {chatStarted && !isEmbedded && (
@@ -583,17 +538,14 @@ export function Thread() {
                   damping: 30,
                 }}
               >
-                <LangGraphLogoSVG width={32} height={32} />
-                <span className="text-xl font-semibold tracking-tight">
-                  Agent Chat
+              <AmsAssistantMark size={32} />
+              <span className="text-xl font-semibold tracking-tight">
+                  AMS Assistant
                 </span>
               </motion.button>
             </div>
 
             <div className="flex items-center gap-4">
-              <div className="flex items-center">
-                <OpenGitHubRepo />
-              </div>
               <TooltipIconButton
                 size="lg"
                 className="p-4"
@@ -611,9 +563,9 @@ export function Thread() {
         {chatStarted && isEmbedded && (
           <div className="flex items-center justify-between gap-3 p-2 z-10 relative border-b bg-white">
             <div className="flex items-center gap-2">
-              <LangGraphLogoSVG width={28} height={28} />
+              <AmsAssistantMark size={28} />
               <span className="text-base font-semibold tracking-tight">
-                Agent Chat
+                AMS Assistant
               </span>
             </div>
             <TooltipIconButton
@@ -672,16 +624,12 @@ export function Thread() {
               </>
             }
             footer={
-              <div className="sticky flex flex-col items-center gap-8 bottom-0 bg-white">
+              <div className="sticky flex flex-col items-center gap-4 bottom-0 bg-white">
                 {!chatStarted && !isEmbedded && (
                   <div className="flex gap-3 items-center">
-                    <LangGraphLogoSVG
-                      className="flex-shrink-0 h-8"
-                      width={62}
-                      height={32}
-                    />
+                    <AmsAssistantMark size={32} />
                     <h1 className="text-2xl font-semibold tracking-tight">
-                      Agent Chat
+                      AMS Assistant
                     </h1>
                   </div>
                 )}
@@ -689,6 +637,12 @@ export function Thread() {
                 <ScrollToBottom className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 animate-in fade-in-0 zoom-in-95" />
 
                 <div className="bg-muted rounded-2xl border shadow-xs mx-auto mb-8 w-full max-w-3xl relative z-10">
+                  <TodosPanel
+                    todos={todos}
+                    expanded={showTodos}
+                    onExpandedChange={setShowTodos}
+                    attached
+                  />
                   {contextLabel ? (
                     <div className="ams-context-chip" aria-label="Current AI context">
                       <span className="ams-context-chip-dot" aria-hidden="true" />

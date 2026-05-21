@@ -19,24 +19,6 @@ type ContextMessage = {
   actions?: ActionDef[];
 };
 
-export type SupportNudge = {
-  id: string;
-  kind: string;
-  title: string;
-  message: string;
-  route?: string;
-  module?: string;
-  severity?: string;
-  prompt?: string;
-  createdAt?: string;
-};
-
-type SupportNudgeMessage = {
-  source: "ams-copilot";
-  type: "SUPPORT_NUDGE";
-  nudge?: SupportNudge;
-};
-
 export type VoiceCommand = {
   id: string;
   text: string;
@@ -73,8 +55,12 @@ export type PageContext = {
   actions: ActionDef[];
 };
 
+export type FreshContextOptions = {
+  timeoutMs?: number;
+  requireFresh?: boolean;
+};
+
 export const COPILOT_CONTEXT_EVENT = "ams-copilot-context-update";
-export const COPILOT_SUPPORT_NUDGE_EVENT = "ams-copilot-support-nudge";
 export const COPILOT_VOICE_COMMAND_EVENT = "ams-copilot-voice-command";
 export const COPILOT_HITL_DECISION_EVENT = "ams-copilot-hitl-decision";
 const FRONTEND_ACTION_TIMEOUT_MS = 15_000;
@@ -118,7 +104,6 @@ export class CopilotBridge {
     const data = event.data as Partial<
       | ContextMessage
       | ActionResultMessage
-      | SupportNudgeMessage
       | VoiceCommandMessage
       | HitlDecisionMessage
     >;
@@ -129,18 +114,6 @@ export class CopilotBridge {
         readables: data.readables,
         actions: data.actions,
       });
-      return;
-    }
-
-    if (data.type === "SUPPORT_NUDGE") {
-      if (!data.nudge || typeof data.nudge !== "object") return;
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(
-          new CustomEvent<SupportNudge>(COPILOT_SUPPORT_NUDGE_EVENT, {
-            detail: data.nudge,
-          }),
-        );
-      }
       return;
     }
 
@@ -219,10 +192,14 @@ export class CopilotBridge {
     };
   }
 
-  getFreshContext(timeoutMs = 1500): Promise<PageContext> {
+  getFreshContext(options: number | FreshContextOptions = {}): Promise<PageContext> {
     if (!this.hasParent()) return Promise.resolve(this.getContext());
 
-    return new Promise<PageContext>((resolve) => {
+    const timeoutMs = typeof options === "number" ? options : options.timeoutMs ?? 1500;
+    const requireFresh =
+      typeof options === "number" ? false : options.requireFresh === true;
+
+    return new Promise<PageContext>((resolve, reject) => {
       const finish = (context: PageContext) => {
         clearTimeout(timer);
         this.pendingContextRequests.delete(finish);
@@ -231,6 +208,14 @@ export class CopilotBridge {
 
       const timer = setTimeout(() => {
         this.pendingContextRequests.delete(finish);
+        if (requireFresh) {
+          reject(
+            new Error(
+              "Fresh AMS page context was not received before the agent resume timeout.",
+            ),
+          );
+          return;
+        }
         resolve(this.getContext());
       }, timeoutMs);
 

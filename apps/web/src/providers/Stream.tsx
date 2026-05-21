@@ -24,7 +24,18 @@ import { useThreads } from "./Thread";
 import { toast } from "sonner";
 import { copilotBridge } from "@/lib/copilot-bridge";
 
-export type StateType = { messages: Message[]; ui?: UIMessage[] };
+export type TodoStatus = "pending" | "in_progress" | "completed" | string;
+export type TodoItem = {
+  id?: string;
+  content: string;
+  status: TodoStatus;
+};
+
+export type StateType = {
+  messages: Message[];
+  ui?: UIMessage[];
+  todos?: TodoItem[];
+};
 type FrontendActionEvent = {
   type: "frontend_action";
   name: string;

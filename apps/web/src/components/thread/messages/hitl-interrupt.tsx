@@ -7,6 +7,7 @@ import {
   buildHitlResume,
   type HitlRequest,
 } from "@/lib/hitl-interrupt";
+import { buildAgentRunConfig } from "@/lib/agent-run-config";
 
 function summarizeArgs(args: Record<string, unknown>): string[] {
   return Object.entries(args)
@@ -33,7 +34,10 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
   const resume = async (decision: "approve" | "reject") => {
     if (busy || thread.isLoading) return;
     setBusy(decision);
-    const pageContext = await copilotBridge.getFreshContext();
+    const pageContext = await copilotBridge.getFreshContext({
+      timeoutMs: 5000,
+      requireFresh: true,
+    });
 
     try {
       thread.submit(
@@ -42,11 +46,7 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
           command: {
             resume: buildHitlResume(interrupt, decision),
           },
-          config: {
-            configurable: {
-              pageContext,
-            },
-          },
+          config: buildAgentRunConfig(pageContext),
           streamMode: ["values", "custom"],
         },
       );

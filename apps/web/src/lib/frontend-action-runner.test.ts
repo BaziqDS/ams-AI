@@ -57,6 +57,7 @@ test("frontend action runner resumes the agent even after the view stops accepti
         },
       },
       config: {
+        recursion_limit: 80,
         configurable: {
           pageContext: {
             readables: [],

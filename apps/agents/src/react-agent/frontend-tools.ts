@@ -26,12 +26,41 @@ type FrontendActionResume = {
   error?: unknown;
 };
 
+const DEDICATED_FRONTEND_ACTIONS = new Map([
+  ["set_form_values", "set_form_values"],
+  ["request_form_submit", "request_form_submit"],
+]);
+
+const AGENT_HIDDEN_FRONTEND_ACTIONS = new Set([
+  "focus_form_field",
+  "validate_active_form",
+]);
+
 const PROTECTED_FRONTEND_ACTIONS = new Set(["request_form_submit"]);
 
-const formValuesSchema = z
+export const formValuesSchema = z
   .record(z.string(), z.unknown())
   .describe(
-    "Map of field name to value. Values may be strings, numbers, booleans, nulls, objects, or arrays."
+    'JSON object keyed by exact writable field names from the active form context. Never pass an array directly as "values". For repeatable rows, wrap the array under its field name, for example {"items":[{"central_register":1}]} or patch exact dotted fields such as {"items.0.central_register":1}.'
+  );
+
+export const setFormValuesArgsSchema = z
+  .object({
+    formId: z
+      .string()
+      .optional()
+      .describe(
+        "Optional target form id from page context. Omit to target the active form."
+      ),
+    values: formValuesSchema,
+    reason: z
+      .string()
+      .optional()
+      .describe("Short reason for the patch, useful for audit/debug logging."),
+  })
+  .strict()
+  .describe(
+    'Arguments for set_form_values. Shape must be {"formId":"...","values":{"fieldName":value},"reason":"..."}. The values property is always an object, never an array.'
   );
 
 function getPageContext(config: LangGraphRunnableConfig | undefined) {
@@ -51,6 +80,31 @@ export function resolveFrontendActionAccess(
     return {
       ok: false,
       message: `Frontend action "${name}" must use the dedicated request_form_submit tool so human approval cannot be bypassed.`,
+    };
+  }
+
+  if (
+    options.allowProtectedActions === false &&
+    DEDICATED_FRONTEND_ACTIONS.has(name)
+  ) {
+    const toolName = DEDICATED_FRONTEND_ACTIONS.get(name);
+    return {
+      ok: false,
+      message:
+        `Frontend action "${name}" must use the dedicated ${toolName} tool. ` +
+        "Do not route dedicated form actions through run_frontend_action.",
+    };
+  }
+
+  if (
+    options.allowProtectedActions === false &&
+    AGENT_HIDDEN_FRONTEND_ACTIONS.has(name)
+  ) {
+    return {
+      ok: false,
+      message:
+        `Frontend action "${name}" is an internal form helper and is not exposed as an agent tool. ` +
+        "Use set_form_values for form edits and request_form_submit when the user asks to save, submit, or advance workflow.",
     };
   }
 
@@ -231,69 +285,9 @@ export const setFormValues = tool(
     name: "set_form_values",
     description:
       "Patch fields in the active browser form. Use exact field names from the Current page context. " +
-      "Use this for live form filling instead of rendering a chat form. Include only fields you intend to change.",
-    schema: z.object({
-      formId: z
-        .string()
-        .optional()
-        .describe(
-          "Optional target form id from page context. Omit to target the active form."
-        ),
-      values: formValuesSchema,
-      reason: z
-        .string()
-        .optional()
-        .describe(
-          "Short reason for the patch, useful for audit/debug logging."
-        ),
-    }),
-  }
-);
-
-export const focusFormField = tool(
-  async ({ formId, field, reason }, config) => {
-    const result = emitFrontendAction(config, "focus_form_field", {
-      formId,
-      field,
-      reason,
-    });
-    return result.message;
-  },
-  {
-    name: "focus_form_field",
-    description:
-      "Move focus to a specific field in the active browser form when the user needs to review or provide a value.",
-    schema: z.object({
-      formId: z
-        .string()
-        .optional()
-        .describe("Optional target form id from page context."),
-      field: z.string().describe("Exact field name from page context."),
-      reason: z
-        .string()
-        .optional()
-        .describe("Why this field needs user attention."),
-    }),
-  }
-);
-
-export const validateActiveForm = tool(
-  async ({ formId }, config) => {
-    const result = emitFrontendAction(config, "validate_active_form", {
-      formId,
-    });
-    return result.message;
-  },
-  {
-    name: "validate_active_form",
-    description:
-      "Ask the active browser form to run its local validation. Use after filling a form or before a submit request.",
-    schema: z.object({
-      formId: z
-        .string()
-        .optional()
-        .describe("Optional target form id from page context."),
-    }),
+      "Use this for live form filling instead of rendering a chat form. Include only fields you intend to change. " +
+      'The tool args must be a single JSON object with a "values" object. Never pass an array directly as values; for row arrays use values.items = [...].',
+    schema: setFormValuesArgsSchema,
   }
 );
 
@@ -419,8 +413,6 @@ export const resolveRelativeDate = tool(
 
 export const FRONTEND_TOOLS = [
   setFormValues,
-  focusFormField,
-  validateActiveForm,
   requestFormSubmit,
   runFrontendAction,
   resolveRelativeDate,

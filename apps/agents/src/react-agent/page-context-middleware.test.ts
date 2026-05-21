@@ -78,12 +78,40 @@ test("page context prompt distinguishes writable form fields from value context"
                 options: [{ label: "CENT-STORE", value: 5 }],
               },
               {
+                name: "items",
+                label: "Items",
+                type: "array",
+                arrayItemFields: [
+                  { name: "central_register", type: "select" },
+                  { name: "central_register_page_no", type: "string" },
+                  { name: "item", type: "select" },
+                ],
+              },
+              {
                 name: "items.0.central_register_page_no",
                 label: "Item 1 Central Page Number",
                 type: "string",
                 required: true,
               },
             ],
+            setValuesSchema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                items: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      central_register: { type: "number" },
+                      central_register_page_no: { type: "string" },
+                      item: { type: "number" },
+                    },
+                  },
+                },
+              },
+            },
             values: {
               finance_check_date: null,
               items: [{ index: 0, item_description: "core i5" }],
@@ -98,12 +126,54 @@ test("page context prompt distinguishes writable form fields from value context"
 
   assert.match(prompt, /Writable field schema/);
   assert.match(prompt, /ONLY these exact names are fillable/);
+  assert.match(prompt, /set_form_values call shape/);
+  assert.match(prompt, /values.*never an array/i);
+  assert.match(prompt, /arrayItemFields=\[central_register, central_register_page_no, item\]/);
+  assert.match(prompt, /set_form_values\.values JSON schema/);
   assert.match(prompt, /items\.0\.central_register; type=select/);
   assert.match(prompt, /items\.0\.central_register_page_no; type=string; label="Item 1 Central Page Number"; required=true/);
   assert.match(prompt, /CENT-STORE=5/);
   assert.match(prompt, /Current values\/context snapshot/);
   assert.match(prompt, /not all keys are writable/);
   assert.match(prompt, /finance_check_date/);
+});
+
+test("page context prompt hides internal form helper actions from the agent", () => {
+  const prompt = formatPageContextForPrompt({
+    readables: [
+      {
+        id: "active-form",
+        description: "Active form",
+        value: {
+          activeForm: {
+            formId: "inspection_create",
+            title: "Inspection",
+            fields: [{ name: "contract_no", type: "string" }],
+            allowedActions: {
+              set_form_values: true,
+              focus_form_field: true,
+              validate_active_form: true,
+              request_form_submit: true,
+            },
+          },
+        },
+      },
+    ],
+    actions: [
+      { name: "set_form_values", description: "Patch form.", parameters: {} },
+      { name: "focus_form_field", description: "Focus field.", parameters: {} },
+      {
+        name: "validate_active_form",
+        description: "Validate form.",
+        parameters: {},
+      },
+      { name: "request_form_submit", description: "Submit form.", parameters: {} },
+    ],
+  });
+
+  assert.match(prompt, /Allowed form actions: set_form_values, request_form_submit/);
+  assert.doesNotMatch(prompt, /focus_form_field/);
+  assert.doesNotMatch(prompt, /validate_active_form/);
 });
 
 test("page context prompt includes current detail readable data before SQL is needed", () => {

@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { Textarea } from "@/components/ui/textarea";
 import { BranchSwitcher, CommandBar } from "./shared";
 import { copilotBridge } from "@/lib/copilot-bridge";
+import { buildAgentRunConfig } from "@/lib/agent-run-config";
 
 function EditableContent({
   value,
@@ -52,18 +53,17 @@ export function HumanMessage({
     setIsEditing(false);
 
     const newMessage: Message = { type: "human", content: value };
-    const pageContext = await copilotBridge.getFreshContext();
+    const pageContext = await copilotBridge.getFreshContext({
+      timeoutMs: 5000,
+      requireFresh: true,
+    });
 
     thread.submit(
       { messages: [newMessage] },
       {
         checkpoint: parentCheckpoint,
         streamMode: ["values", "custom"],
-        config: {
-          configurable: {
-            pageContext,
-          },
-        },
+        config: buildAgentRunConfig(pageContext),
         optimisticValues: (prev) => {
           const values = meta?.firstSeenState?.values;
           if (!values) return prev;

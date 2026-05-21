@@ -49,7 +49,8 @@ export function FrontendActionInterruptView({
 
     runFrontendActionInterrupt(interrupt, {
       callAction: (name, args) => copilotBridge.callAction(name, args),
-      getFreshContext: () => copilotBridge.getFreshContext(),
+      getFreshContext: () =>
+        copilotBridge.getFreshContext({ timeoutMs: 5000, requireFresh: true }),
       submit: (values, options) => submitRef.current(values, options),
       isMounted: () => mountedRef.current,
       onStatus: (nextStatus, nextMessage) => {

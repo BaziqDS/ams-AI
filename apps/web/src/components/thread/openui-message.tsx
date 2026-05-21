@@ -4,7 +4,6 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 import { Renderer } from "@openuidev/react-lang";
 import type {
   ActionEvent,
-  OpenUIError,
   ParseResult,
 } from "@openuidev/react-lang";
 import {
@@ -12,6 +11,11 @@ import {
   ThemeProvider,
 } from "@openuidev/react-ui";
 import { amsOpenUiLibrary } from "@/lib/ams-openui";
+import { copilotBridge } from "@/lib/copilot-bridge";
+import {
+  formatOpenUiErrors,
+  formatOpenUiParseDiagnostics,
+} from "@/lib/openui-diagnostics";
 
 function stripOpenUiFence(content: string) {
   const trimmed = content.trim();
@@ -46,16 +50,6 @@ class OpenUiErrorBoundary extends Component<
   }
 }
 
-function formatOpenUiErrors(errors: OpenUIError[]) {
-  return errors
-    .map((error) => {
-      const statement = error.statementId ? `"${error.statementId}": ` : "";
-      const hint = error.hint ? ` Hint: ${error.hint}` : "";
-      return `[${error.source}] ${statement}${error.message}${hint}`;
-    })
-    .join("\n");
-}
-
 function reportOpenUiParseResult(result: ParseResult | null) {
   if (!result) return;
 
@@ -70,17 +64,28 @@ function reportOpenUiParseResult(result: ParseResult | null) {
   });
 }
 
+const openUiToolProvider = {
+  get_page_context: async () => copilotBridge.getFreshContext(),
+};
+
 export function OpenUiAssistantMessage({
   code,
   fallback,
   isStreaming,
   onAction,
+  onDiagnostics,
 }: {
   code: string;
   fallback: ReactNode;
   isStreaming: boolean;
   onAction?: (event: ActionEvent) => void;
+  onDiagnostics?: (diagnostics: string) => void;
 }) {
+  const notifyDiagnostics = (diagnostics: string) => {
+    if (!diagnostics || isStreaming || !onDiagnostics) return;
+    window.setTimeout(() => onDiagnostics(diagnostics), 0);
+  };
+
   return (
     <OpenUiErrorBoundary fallback={fallback}>
       <div className="openui-chat-message">
@@ -90,12 +95,18 @@ export function OpenUiAssistantMessage({
             response={code}
             isStreaming={isStreaming}
             onAction={onAction}
+            toolProvider={openUiToolProvider}
             onError={(errors) => {
               if (errors.length) {
-                console.warn("OpenUI validation errors", formatOpenUiErrors(errors));
+                const diagnostics = formatOpenUiErrors(errors);
+                console.warn("OpenUI validation errors", diagnostics);
+                notifyDiagnostics(diagnostics);
               }
             }}
-            onParseResult={reportOpenUiParseResult}
+            onParseResult={(result) => {
+              reportOpenUiParseResult(result);
+              notifyDiagnostics(formatOpenUiParseDiagnostics(result));
+            }}
           />
         </ThemeProvider>
       </div>

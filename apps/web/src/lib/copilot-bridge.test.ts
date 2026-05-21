@@ -48,6 +48,9 @@ function installFakeWindow(nextRoute: string) {
     removeEventListener(type: string) {
       listeners.delete(type);
     },
+    dispatchEvent() {
+      return true;
+    },
   };
 
   Object.defineProperty(globalThis, "window", {
@@ -71,4 +74,36 @@ test("getFreshContext resolves with the latest parent route instead of cached ro
   );
 
   assert.deepEqual(runtime?.value, { route: "/locations" });
+});
+
+test("getFreshContext can reject instead of silently returning stale context", async () => {
+  const listeners = new Map<string, Listener>();
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      parent: {
+        postMessage() {
+          // Simulate a parent shell that does not answer REQUEST_CONTEXT.
+        },
+      },
+      addEventListener(type: string, listener: Listener) {
+        listeners.set(type, listener);
+      },
+      removeEventListener(type: string) {
+        listeners.delete(type);
+      },
+      dispatchEvent() {
+        return true;
+      },
+    },
+  });
+
+  const bridge = new CopilotBridge();
+  bridge.init();
+  bridge.ingestContextUpdate(runtimeContext("/stale"));
+
+  await assert.rejects(
+    bridge.getFreshContext({ timeoutMs: 1, requireFresh: true }),
+    /Fresh AMS page context/,
+  );
 });

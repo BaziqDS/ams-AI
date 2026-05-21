@@ -20,6 +20,10 @@ const SYSTEM_READABLE_IDS = new Set([
   ACTIVITY_READABLE_ID,
   PERMISSION_READABLE_ID,
 ]);
+const AGENT_HIDDEN_FRONTEND_ACTIONS = new Set([
+  "focus_form_field",
+  "validate_active_form",
+]);
 
 type CompactOptions = {
   arrayLimit?: number;
@@ -351,6 +355,16 @@ function formatField(field: unknown): string | null {
     parts.push(`options=[${options.join(", ")}${field.options.length > 8 ? ", ..." : ""}]`);
   }
 
+  if (Array.isArray(field.arrayItemFields) && field.arrayItemFields.length > 0) {
+    const itemFields = field.arrayItemFields
+      .map((itemField) => (isObject(itemField) && typeof itemField.name === "string" ? itemField.name : null))
+      .filter((itemField): itemField is string => Boolean(itemField))
+      .slice(0, 24);
+    if (itemFields.length > 0) {
+      parts.push(`arrayItemFields=[${itemFields.join(", ")}${field.arrayItemFields.length > 24 ? ", ..." : ""}]`);
+    }
+  }
+
   return parts.join("; ");
 }
 
@@ -385,6 +399,11 @@ function formatActiveForm(formReadables: unknown[]): string[] {
     lines.push(`## ACTIVE FORM: ${String(activeForm.title ?? activeForm.formId)}`);
     lines.push(`- formId: ${String(activeForm.formId)}`);
     if (activeForm.mode) lines.push(`- mode: ${String(activeForm.mode)}`);
+    lines.push(
+      '- set_form_values call shape: {"formId":"' +
+        String(activeForm.formId) +
+        '","values":{"fieldName":value},"reason":"short reason"}. The "values" argument is always a JSON object, never an array. For repeatable rows, use {"values":{"items":[{"field":value}]}} or exact dotted names such as {"values":{"items.0.central_register":1}}.',
+    );
 
     if (Array.isArray(activeForm.fields) && activeForm.fields.length > 0) {
       lines.push("- Writable field schema (ONLY these exact names are fillable with set_form_values):");
@@ -398,6 +417,19 @@ function formatActiveForm(formReadables: unknown[]): string[] {
       }
     } else {
       lines.push("- Writable field schema: none currently exposed.");
+    }
+
+    if (isObject(activeForm.setValuesSchema)) {
+      lines.push(
+        `- set_form_values.values JSON schema: ${safeStringify(
+          compactForPrompt(activeForm.setValuesSchema, {
+            arrayLimit: 24,
+            objectKeyLimit: 48,
+            maxDepth: 8,
+          }),
+          4000,
+        )}`,
+      );
     }
 
     if (isObject(activeForm.values)) {
@@ -433,7 +465,7 @@ function formatActiveForm(formReadables: unknown[]): string[] {
 
     if (isObject(activeForm.allowedActions)) {
       const allowed = Object.entries(activeForm.allowedActions)
-        .filter(([, v]) => v === true)
+        .filter(([k, v]) => v === true && !AGENT_HIDDEN_FRONTEND_ACTIONS.has(k))
         .map(([k]) => k);
       if (allowed.length > 0) {
         lines.push(`- Allowed form actions: ${allowed.join(", ")}`);
@@ -499,8 +531,11 @@ function formatPermissions(perms: unknown, actions: ActionDef[]): string[] {
     }
   }
 
-  const allowedActions = actions.filter((a) => a.allowed !== false);
-  const blockedActions = actions.filter((a) => a.allowed === false);
+  const agentActions = actions.filter(
+    (a) => !AGENT_HIDDEN_FRONTEND_ACTIONS.has(a.name),
+  );
+  const allowedActions = agentActions.filter((a) => a.allowed !== false);
+  const blockedActions = agentActions.filter((a) => a.allowed === false);
 
   if (allowedActions.length > 0) {
     lines.push("");

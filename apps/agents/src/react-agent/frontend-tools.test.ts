@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   requestFormSubmit,
+  setFormValues,
+  setFormValuesArgsSchema,
   formatFrontendActionResult,
   resolveFrontendActionAccess,
 } from "./frontend-tools.js";
@@ -88,6 +90,42 @@ test("does not allow generic frontend action dispatch to bypass submit approval"
   assert.match(access.message, /dedicated request_form_submit tool/i);
 });
 
+test("does not allow generic frontend action dispatch to bypass dedicated form tools", () => {
+  const access = resolveFrontendActionAccess(
+    {
+      configurable: {
+        pageContext: {
+          actions: [{ name: "set_form_values", allowed: true }],
+        },
+      },
+    },
+    "set_form_values",
+    { allowProtectedActions: false }
+  );
+
+  assert.equal(access.ok, false);
+  assert.match(access.message, /dedicated set_form_values tool/i);
+  assert.match(access.message, /run_frontend_action/i);
+});
+
+test("does not expose low-value form helper actions through generic dispatch", () => {
+  const access = resolveFrontendActionAccess(
+    {
+      configurable: {
+        pageContext: {
+          actions: [{ name: "validate_active_form", allowed: true }],
+        },
+      },
+    },
+    "validate_active_form",
+    { allowProtectedActions: false }
+  );
+
+  assert.equal(access.ok, false);
+  assert.match(access.message, /internal form helper/i);
+  assert.match(access.message, /set_form_values/);
+});
+
 test("allows approved submit tool to reach the browser when page context is stale", () => {
   const access = resolveFrontendActionAccess(
     {
@@ -145,4 +183,60 @@ test("submit tool description covers inspection workflow transitions", () => {
   assert.match(requestFormSubmit.description, /inspection/i);
   assert.match(requestFormSubmit.description, /intent.*submit/i);
   assert.match(requestFormSubmit.description, /human approval/i);
+});
+
+test("set_form_values schema rejects raw array values", () => {
+  const result = setFormValuesArgsSchema.safeParse({
+    values: [
+      {
+        central_register: 1,
+        central_register_page_no: "CR-2026-05-21-001",
+        item: 3,
+      },
+    ],
+    reason: "Filling central register rows.",
+  });
+
+  assert.equal(result.success, false);
+  assert.match(JSON.stringify(result.error.issues), /Expected object/);
+});
+
+test("set_form_values tool contract explains repeatable row shape", () => {
+  assert.match(setFormValues.description, /single JSON object/i);
+  assert.match(setFormValues.description, /Never pass an array directly/i);
+  assert.match(setFormValuesArgsSchema.description ?? "", /values.*object/i);
+  assert.match(
+    setFormValuesArgsSchema.shape.values.description ?? "",
+    /"items":\[/
+  );
+
+  const valid = setFormValuesArgsSchema.safeParse({
+    formId: "inspection_detail_13_central_register",
+    values: {
+      items: [
+        {
+          central_register: 1,
+          central_register_page_no: "CR-2026-05-21-001",
+          item: 3,
+        },
+      ],
+    },
+    reason: "Filling central register rows.",
+  });
+
+  assert.equal(valid.success, true);
+});
+
+test("frontend tool list exposes only production agent actions", async () => {
+  const { FRONTEND_TOOLS } = await import("./frontend-tools.js");
+  const names = FRONTEND_TOOLS.map((frontendTool) => frontendTool.name);
+
+  assert.deepEqual(names, [
+    "set_form_values",
+    "request_form_submit",
+    "run_frontend_action",
+    "resolve_relative_date",
+  ]);
+  assert.doesNotMatch(names.join(","), /focus_form_field/);
+  assert.doesNotMatch(names.join(","), /validate_active_form/);
 });
