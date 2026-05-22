@@ -234,6 +234,7 @@ test("frontend tool list exposes only production agent actions", async () => {
   assert.deepEqual(names, [
     "set_form_values",
     "request_form_submit",
+    "get_app_map",
     "run_frontend_action",
     "resolve_relative_date",
   ]);

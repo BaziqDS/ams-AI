@@ -327,6 +327,26 @@ export const requestFormSubmit = tool(
   }
 );
 
+export const getAppMap = tool(
+  async (_input, config) => {
+    const result = emitFrontendAction(
+      config,
+      "get_app_map",
+      {},
+      {
+        allowMissingRegisteredAction: true,
+      }
+    );
+    return result.message;
+  },
+  {
+    name: "get_app_map",
+    description:
+      "Return the current AMS app map: modules, list routes, create form ids, route patterns, required capabilities, and how to open forms. Use before guessing a route or form id.",
+    schema: z.object({}),
+  }
+);
+
 export const runFrontendAction = tool(
   async ({ name, args }, config) => {
     const safeArgs = args && typeof args === "object" ? args : {};
@@ -414,6 +434,7 @@ export const resolveRelativeDate = tool(
 export const FRONTEND_TOOLS = [
   setFormValues,
   requestFormSubmit,
+  getAppMap,
   runFrontendAction,
   resolveRelativeDate,
 ];

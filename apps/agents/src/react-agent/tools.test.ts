@@ -45,3 +45,16 @@ test("sql select tool description reinforces schema-first usage", () => {
   assert.match(selectTool.description, /sql_db_schema/i);
   assert.match(selectTool.description, /LIMIT/i);
 });
+
+test("agent tool registry does not expose Tavily web search", () => {
+  const toolNames = TOOLS.map((tool): string => tool.name);
+
+  assert.doesNotMatch(toolNames.join(","), /tavily/i);
+  assert.equal(toolNames.includes("tavily_search"), false);
+});
+
+test("agent tool registry exposes get_app_map directly", () => {
+  const toolNames = TOOLS.map((tool): string => tool.name);
+
+  assert.equal(toolNames.includes("get_app_map"), true);
+});

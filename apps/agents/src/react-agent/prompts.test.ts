@@ -39,6 +39,11 @@ test("prompt tells the agent to use compact AMS activity memory", () => {
   );
 });
 
+test("prompt does not advertise Tavily or web search tools", () => {
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /Tavily/i);
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /web search/i);
+});
+
 test("prompt tells the agent to preflight permissions before write actions", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /__ams_permission_context/);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /permission\/capability snapshot/i);

@@ -2,7 +2,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SqlDatabase } from "@langchain/classic/sql_db";
-import { TavilySearch } from "@langchain/tavily";
 import { tool } from "langchain";
 import { DataSource, type DataSourceOptions } from "typeorm";
 import { z } from "zod";
@@ -76,50 +75,6 @@ async function getSqlDatabase() {
 
   return sqlDatabase;
 }
-
-const search = tool(
-  async (input) => {
-    const searchTool = new TavilySearch({
-      maxResults: 5,
-      topic: input.topic ?? "general",
-      tavilyApiKey: process.env.TAVILY_API_KEY,
-    });
-
-    return searchTool.invoke(input);
-  },
-  {
-    name: "tavily_search",
-    description:
-      "A search engine optimized for comprehensive, accurate, and trusted results. Useful for answering questions about current events or external information.",
-    schema: z.object({
-      query: z.string().describe("The search query to run."),
-      topic: z
-        .enum(["general", "news", "finance"])
-        .optional()
-        .describe("Search topic category."),
-      searchDepth: z
-        .enum(["basic", "advanced"])
-        .optional()
-        .describe("Search depth."),
-      timeRange: z
-        .enum(["day", "week", "month", "year"])
-        .optional()
-        .describe("Optional recency filter."),
-      includeImages: z
-        .boolean()
-        .optional()
-        .describe("Whether to include image results."),
-      includeDomains: z
-        .array(z.string())
-        .optional()
-        .describe("Domains to include."),
-      excludeDomains: z
-        .array(z.string())
-        .optional()
-        .describe("Domains to exclude."),
-    }),
-  }
-);
 
 const getCurrentTime = tool(async () => new Date().toISOString(), {
   name: "get_current_time",
@@ -241,7 +196,6 @@ const selectFromSqlDatabase = tool(
 );
 
 export const TOOLS = [
-  search,
   getCurrentTime,
   listSqlTables,
   getSqlSchema,
