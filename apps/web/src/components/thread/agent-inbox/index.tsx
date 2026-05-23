@@ -36,7 +36,7 @@ export function ThreadView({ interrupt }: ThreadViewProps) {
   };
 
   return (
-    <div className="flex flex-col lg:flex-row w-full max-h-[80vh] p-4 sm:p-6 lg:p-8 bg-gray-50/50 rounded-2xl overflow-y-auto [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-track]:bg-transparent">
+    <div className="flex max-h-[80vh] w-full min-w-0 max-w-full flex-col overflow-x-hidden overflow-y-auto rounded-2xl bg-gray-50/50 p-4 sm:p-6 lg:flex-row lg:p-8 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-track]:bg-transparent">
       {showSidePanel ? (
         <StateView
           handleShowSidePanel={handleShowSidePanel}

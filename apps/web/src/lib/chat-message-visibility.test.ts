@@ -26,9 +26,9 @@ test("hidden voice commands render as the translated transcript", () => {
 test("hidden non-voice messages remain hidden", () => {
   const messages = getRenderableChatMessages([
     {
-      id: `${DO_NOT_RENDER_ID_PREFIX}repair-1`,
+      id: `${DO_NOT_RENDER_ID_PREFIX}internal-1`,
       type: "human",
-      content: "OPENUI_RENDERER_REPAIR_REQUEST",
+      content: "internal control message",
     },
     {
       id: "visible-1",

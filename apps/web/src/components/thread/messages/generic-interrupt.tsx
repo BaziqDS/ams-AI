@@ -55,19 +55,19 @@ export function GenericInterruptView({
   const displayEntries = processEntries();
 
   return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden">
+    <div className="w-full min-w-0 max-w-full overflow-hidden rounded-lg border border-gray-200">
       <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <h3 className="font-medium text-gray-900">Human Interrupt</h3>
         </div>
       </div>
       <motion.div
-        className="min-w-full bg-gray-100"
+        className="w-full min-w-0 max-w-full bg-gray-100"
         initial={false}
         animate={{ height: "auto" }}
         transition={{ duration: 0.3 }}
       >
-        <div className="p-3">
+        <div className="min-w-0 p-3">
           <AnimatePresence mode="wait" initial={false}>
             <motion.div
               key={isExpanded ? "expanded" : "collapsed"}
@@ -77,10 +77,11 @@ export function GenericInterruptView({
               transition={{ duration: 0.2 }}
               style={{
                 maxHeight: isExpanded ? "none" : "500px",
-                overflow: "auto",
+                overflowY: "auto",
+                overflowX: "hidden",
               }}
             >
-              <table className="min-w-full divide-y divide-gray-200">
+              <table className="w-full table-fixed divide-y divide-gray-200">
                 <tbody className="divide-y divide-gray-200">
                   {displayEntries.map((item, argIdx) => {
                     const [key, value] = Array.isArray(interrupt)
@@ -88,12 +89,12 @@ export function GenericInterruptView({
                       : (item as [string, any]);
                     return (
                       <tr key={argIdx}>
-                        <td className="px-4 py-2 text-sm font-medium text-gray-900 whitespace-nowrap">
+                        <td className="w-28 px-4 py-2 align-top text-sm font-medium text-gray-900 break-all">
                           {key}
                         </td>
-                        <td className="px-4 py-2 text-sm text-gray-500">
+                        <td className="min-w-0 px-4 py-2 align-top text-sm text-gray-500 break-all">
                           {isComplexValue(value) ? (
-                            <code className="bg-gray-50 rounded px-2 py-1 font-mono text-sm">
+                            <code className="block max-w-full whitespace-pre-wrap break-all rounded bg-gray-50 px-2 py-1 font-mono text-sm">
                               {JSON.stringify(value, null, 2)}
                             </code>
                           ) : (

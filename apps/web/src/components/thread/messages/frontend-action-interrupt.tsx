@@ -73,15 +73,15 @@ export function FrontendActionInterruptView({
   }
 
   return (
-    <div className="w-full rounded-lg border border-blue-200 bg-blue-50/60 text-blue-950 shadow-sm">
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-blue-200/70">
+    <div className="w-full min-w-0 max-w-full overflow-hidden rounded-lg border border-blue-200 bg-blue-50/60 text-blue-950 shadow-sm">
+      <div className="flex min-w-0 items-center gap-2 px-4 py-2.5 border-b border-blue-200/70">
         <StatusIcon />
-        <span className="text-sm font-semibold">
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold">
           {actionTitle(interrupt.action.name)}
         </span>
         <span className="ml-auto text-xs text-blue-800/80">{status}</span>
       </div>
-      <div className="px-4 py-3 text-xs leading-relaxed text-blue-900">
+      <div className="min-w-0 break-all px-4 py-3 text-xs leading-relaxed text-blue-900">
         {message}
       </div>
     </div>

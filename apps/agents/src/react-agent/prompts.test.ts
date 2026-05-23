@@ -40,7 +40,7 @@ test("prompt routes current list search filters pagination and row opens through
   assert.match(SYSTEM_PROMPT_TEMPLATE, /open_visible_row/);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /available_filters/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /refreshed LIVE PAGE STATE/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /Do not use SQL or DOM\/browser guessing/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /Do not use DOM\/browser guessing/i);
 });
 
 test("prompt forbids claiming submit success without verified frontend result", () => {
@@ -76,11 +76,20 @@ test("prompt treats manual form submits as completed workflow state", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /Last closed form/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /before calling request_form_submit/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /inspection_create.*recordId/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /navigate_to_route.*\/inspections\/\{recordId\}/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /current route already equals redirectTo/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /use current \/inspections\/\{recordId\} detail context/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /otherwise call navigate_to_route with path "\/inspections\/\{recordId\}"/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /reason=user_submitted_manually/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /reason=user_closed_form/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /reason=user_navigated_away/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /Do not retry request_form_submit/i);
+});
+
+test("prompt avoids post-create duplicate navigation", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /POST-CREATE WORKFLOW/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /first compare LIVE PAGE STATE current route/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /If already on the detail route, do not call navigate_to_route/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /Only call navigate_to_route when the current route is different/i);
 });
 
 test("prompt does not advertise Tavily or web search tools", () => {
@@ -105,7 +114,7 @@ test("prompt routes inspection stage transitions through frontend submit actions
   assert.match(SYSTEM_PROMPT_TEMPLATE, /intent "submit"/i);
   assert.match(
     SYSTEM_PROMPT_TEMPLATE,
-    /Never use SQL to perform or simulate workflow transitions/i
+    /Never bypass the AMS UI workflow/i
   );
 });
 
@@ -124,14 +133,30 @@ test("prompt only names registered frontend form tools", () => {
   assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /set_inspection_items/);
 });
 
-test("prompt discourages SQL discovery during active form filling", () => {
-  assert.match(
+test("prompt does not expose direct database-query tools or fallback instructions", () => {
+  const removedTechnologyName = ["s", "q", "l"].join("");
+  const removedToolPrefix = `${removedTechnologyName}_db_`;
+
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, new RegExp(removedToolPrefix, "i"));
+  assert.doesNotMatch(
     SYSTEM_PROMPT_TEMPLATE,
-    /Do not call sql_db_.*just to discover form fields/i
+    new RegExp(`${removedTechnologyName} SCHEMA-FIRST RULE`, "i"),
   );
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /Database access is READ-ONLY/i);
+  assert.doesNotMatch(
+    SYSTEM_PROMPT_TEMPLATE,
+    new RegExp(`${["S", "E", "L", "E", "C", "T"].join("")} query`, "i"),
+  );
+  assert.doesNotMatch(
+    SYSTEM_PROMPT_TEMPLATE,
+    new RegExp(`\\b${removedTechnologyName}\\b`, "i"),
+  );
+});
+
+test("prompt resolves form data through page context and frontend option tools", () => {
   assert.match(
     SYSTEM_PROMPT_TEMPLATE,
-    /do not pre-resolve dropdown or foreign-key IDs with SQL before opening the relevant form/i
+    /do not pre-resolve dropdown or foreign-key IDs before opening the relevant form/i
   );
   assert.match(
     SYSTEM_PROMPT_TEMPLATE,
@@ -187,25 +212,10 @@ test("prompt distinguishes current inspection stage from next transition", () =>
   assert.match(SYSTEM_PROMPT_TEMPLATE, /do not describe the current stage as a future stage/i);
 });
 
-test("prompt requires schema-first SQL for broad database questions", () => {
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /SQL SCHEMA-FIRST RULE/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /call sql_db_list_tables/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /call sql_db_schema/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /Do not guess table names/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /inventory_category/i);
-});
-
-test("prompt requires bounded SQL result sets and error recovery", () => {
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /LIMIT/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /aggregate/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /If sql_db_select fails/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /do not retry by guessing/i);
-});
-
-test("prompt tells the agent to use detail page context before SQL", () => {
+test("prompt tells the agent to use detail page context as the primary current-record source", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /DETAIL PAGE CONTEXT/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /current record/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /before SQL/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /first source/i);
 });
 
 test("prompt keeps page readable contracts generic instead of enumerating route schemas", () => {
@@ -222,36 +232,22 @@ test("prompt forbids answering current-page references from stale route memory",
   assert.match(SYSTEM_PROMPT_TEMPLATE, /do not answer from older route/i);
 });
 
-test("prompt includes AMS OpenUI recipes for richer generative UI", () => {
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /AMS OpenUI composition recipes/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /inspection_certificate_detail/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /item_distribution_summary/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /low_stock_report/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /maintenance_due_report/i);
-});
+test("prompt relies on the generated OpenUI system prompt instead of custom correction rules", () => {
+  const removedRepairMarker = [
+    "OPENUI",
+    "RENDERER",
+    "REPAIR",
+    "REQUEST",
+  ].join("_");
+  const removedRecipeHeading = ["AMS", "OpenUI", "composition", "recipes"].join(" ");
+  const removedChartRule = ["There", "is", "no", "generic", "Chart", "component"].join(" ");
+  const removedInlineRule = ["never", "assign", "variables", "inside", "arrays"].join(" ");
 
-test("prompt tells the agent when to use richer OpenUI components", () => {
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /Use Tabs when/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /Use Steps for workflow/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /Use Tag for status/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /Use Callout for blockers/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /Use charts only when/i);
-});
-
-test("prompt forbids hallucinated OpenUI chart and TextContent arguments", () => {
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /There is no generic Chart component/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /TextContent accepts exactly 1 or 2 arguments/i);
-});
-
-test("prompt forbids invalid inline OpenUI variable assignments", () => {
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /never assign variables inside arrays/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /include every defined variable/i);
-});
-
-test("prompt supports OpenUI renderer repair without exposing renderer-only tools", () => {
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /OPENUI_RENDERER_REPAIR_REQUEST/);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /Do not call get_page_context/);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /not an agent tool/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /OpenUI system prompt generated by the OpenUI library/i);
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, new RegExp(removedRepairMarker));
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, new RegExp(removedRecipeHeading, "i"));
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, new RegExp(removedChartRule, "i"));
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, new RegExp(removedInlineRule, "i"));
   assert.match(SYSTEM_PROMPT_TEMPLATE, /@ToAssistant/);
 });
 
@@ -310,5 +306,5 @@ test("module manifest section does not hardcode page data or workflow details", 
 test("durable prompt references detail page context as primary source", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /DETAIL PAGE CONTEXT/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /current record/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /before SQL/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /first source/i);
 });

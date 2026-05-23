@@ -56,36 +56,42 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
   };
 
   return (
-    <div className="w-full rounded-lg border border-amber-200 bg-amber-50/50 text-amber-950 shadow-sm">
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-amber-200/70">
+    <div className="w-full max-w-full min-w-0 overflow-hidden rounded-lg border border-amber-200 bg-amber-50/50 text-amber-950 shadow-sm">
+      <div className="flex min-w-0 items-center gap-2 border-b border-amber-200/70 px-3 py-2.5 sm:px-4">
         <ShieldCheck className="size-4 shrink-0" />
-        <span className="text-sm font-semibold">Approval required</span>
-        <span className="ml-auto text-xs text-amber-800/80">
+        <span className="min-w-0 truncate text-sm font-semibold">
+          Approval required
+        </span>
+        <span className="ml-auto shrink-0 text-xs text-amber-800/80">
           {interrupt.actionRequests.length} action
           {interrupt.actionRequests.length === 1 ? "" : "s"}
         </span>
       </div>
 
-      <div className="px-4 py-3 space-y-3">
+      <div className="max-h-[min(24rem,65vh)] min-w-0 space-y-3 overflow-y-auto overflow-x-hidden px-3 py-3 sm:px-4">
         {interrupt.actionRequests.map((action, index) => {
           const summary = summarizeArgs(action.args);
           return (
             <div
               key={`${action.name}-${index}`}
-              className="rounded-md border border-amber-200/60 bg-white px-3 py-2.5 space-y-1.5"
+              className="min-w-0 space-y-1.5 overflow-hidden rounded-md border border-amber-200/60 bg-white px-3 py-2.5"
             >
-              <div className="text-sm font-semibold text-gray-900">
+              <div className="truncate text-sm font-semibold text-gray-900">
                 {actionTitle(action.name)}
               </div>
               {action.description ? (
-                <div className="text-xs leading-relaxed text-gray-600">
+                <div className="break-words text-xs leading-relaxed text-gray-600">
                   {action.description}
                 </div>
               ) : null}
               {summary.length > 0 && (
-                <ul className="mt-1 text-xs font-mono leading-relaxed text-gray-700 space-y-0.5">
+                <ul className="mt-1 max-h-32 min-w-0 space-y-0.5 overflow-y-auto overflow-x-hidden font-mono text-xs leading-relaxed text-gray-700">
                   {summary.map((line, i) => (
-                    <li key={i} className="truncate" title={line}>
+                    <li
+                      key={i}
+                      className="min-w-0 whitespace-pre-wrap break-all"
+                      title={line}
+                    >
                       <span className="text-gray-400">›</span> {line}
                     </li>
                   ))}
@@ -95,7 +101,7 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
           );
         })}
 
-        <div className="flex justify-end gap-2 pt-1">
+        <div className="flex flex-wrap justify-end gap-2 pt-1">
           <Button
             type="button"
             variant="outline"

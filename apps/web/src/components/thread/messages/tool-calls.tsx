@@ -60,7 +60,7 @@ function TodoToolArgs({ args }: { args: unknown }) {
   }
 
   return (
-    <div className="divide-y divide-gray-200 bg-white">
+    <div className="min-w-0 max-w-full divide-y divide-gray-200 overflow-hidden bg-white">
       {todos.map((todo, index) => {
         const status = String(todo.status ?? "pending");
         return (
@@ -76,7 +76,7 @@ function TodoToolArgs({ args }: { args: unknown }) {
             <div className="min-w-0 flex-1">
               <div
                 className={cn(
-                  "break-words leading-snug",
+                  "break-words break-all leading-snug",
                   status === "completed" && "line-through decoration-gray-400",
                 )}
               >

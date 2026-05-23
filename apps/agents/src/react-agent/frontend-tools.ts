@@ -25,11 +25,28 @@ type FrontendActionResume = {
   error?: unknown;
 };
 
+type HitlDecision = {
+  type?: unknown;
+  message?: unknown;
+};
+
+type HitlResume = {
+  decisions?: unknown;
+};
+
 type LangGraphScratchpadLike = {
   interruptCounter?: unknown;
   resume?: unknown;
   nullResume?: unknown;
 };
+
+type FrontendActionRequestResult =
+  | { ok: true; resume: unknown }
+  | { ok: false; message: string };
+
+type FrontendActionResult =
+  | { ok: true; message: string }
+  | { ok: false; message: string };
 
 const DEDICATED_FRONTEND_ACTIONS = new Map([
   ["set_form_values", "set_form_values"],
@@ -278,7 +295,28 @@ export function emitFrontendAction(
   args: Record<string, unknown>,
   options?: FrontendActionAccessOptions,
   interruptFn: (value: unknown) => unknown = interrupt
-) {
+): FrontendActionResult {
+  const result = emitFrontendActionRequest(
+    config,
+    name,
+    args,
+    options,
+    interruptFn
+  );
+  if (!result.ok) return result;
+  return {
+    ok: true,
+    message: formatFrontendActionResult(name, result.resume),
+  };
+}
+
+export function emitFrontendActionRequest(
+  config: LangGraphRunnableConfig | undefined,
+  name: string,
+  args: Record<string, unknown>,
+  options?: FrontendActionAccessOptions,
+  interruptFn: (value: unknown) => unknown = interrupt
+): FrontendActionRequestResult {
   if (!hasPendingInterruptResume(config)) {
     const formId = args.formId;
     const access = resolveFrontendActionAccess(config, name, {
@@ -298,8 +336,165 @@ export function emitFrontendAction(
 
   return {
     ok: true,
-    message: formatFrontendActionResult(name, resume),
+    resume,
   };
+}
+
+function normalizedValidationFailure(
+  resume: unknown
+): { ok: false; message: string } | null {
+  if (!isObject(resume)) {
+    return {
+      ok: false,
+      message:
+        'Frontend action "validate_active_form" FAILED: no structured browser result was returned. Do not ask the user for submit approval until the form can be validated.',
+    };
+  }
+
+  const typed = resume as FrontendActionResume;
+  if (typed.ok === false) {
+    return {
+      ok: false,
+      message:
+        `Frontend action "validate_active_form" FAILED: ${renderResult(typed.error ?? "unknown error")}. ` +
+        "Do not ask the user for submit approval until validation succeeds.",
+    };
+  }
+
+  const result = typed.result;
+  if (!isObject(result)) {
+    return {
+      ok: false,
+      message:
+        `Frontend action "validate_active_form" completed but did not return a verified ok=true result. ` +
+        `Treat this as unverified and do not ask the user for submit approval. Result: ${renderResult(result)}.`,
+    };
+  }
+
+  if (result.ok === true) return null;
+
+  const fieldErrors = isObject(result.fieldErrors)
+    ? result.fieldErrors
+    : isObject(result.errors)
+      ? result.errors
+      : undefined;
+  const globalErrors = Array.isArray(result.globalErrors)
+    ? result.globalErrors.map(String)
+    : undefined;
+  const reasonText =
+    typeof result.message === "string"
+      ? result.message
+      : typeof result.reason === "string"
+        ? result.reason
+        : "The active form has validation errors.";
+
+  return {
+    ok: false,
+    message: [
+      'Frontend action "validate_active_form" FAILED.',
+      "PRE_APPROVAL_VALIDATION_FAILED: the form is not ready to submit, so no user approval was requested.",
+      reasonText,
+      result.errorType ? `errorType=${String(result.errorType)}` : undefined,
+      fieldErrors ? `fieldErrors=${renderResult(fieldErrors)}` : undefined,
+      globalErrors ? `globalErrors=${renderResult(globalErrors)}` : undefined,
+      "Fix these fields with set_form_values, then call request_form_submit again.",
+    ].filter(Boolean).join(" "),
+  };
+}
+
+function isApprovedHitlResume(value: unknown): value is HitlResume {
+  if (!isObject(value)) return false;
+  const decisions = value.decisions;
+  if (!Array.isArray(decisions) || decisions.length === 0) return false;
+  return decisions.every(
+    (decision) => isObject(decision) && decision.type === "approve"
+  );
+}
+
+function rejectedHitlMessage(value: unknown) {
+  if (!isObject(value) || !Array.isArray(value.decisions)) {
+    return "User approval did not return a valid decision. Do not submit the form.";
+  }
+  const decision = value.decisions.find(
+    (candidate): candidate is HitlDecision => isObject(candidate)
+  );
+  if (
+    decision &&
+    decision.type === "reject" &&
+    typeof decision.message === "string" &&
+    decision.message.trim()
+  ) {
+    return decision.message.trim();
+  }
+  return "User rejected request_form_submit. Do not submit the form.";
+}
+
+export function requestFormSubmitWithPreflight(
+  config: LangGraphRunnableConfig | undefined,
+  args: { formId?: string; intent?: "save" | "submit" | "save_draft" },
+  interruptFn: (value: unknown) => unknown = interrupt
+) {
+  const actionArgs = {
+    formId: args.formId,
+    intent: args.intent,
+  };
+  const submitAccess = resolveFrontendActionAccess(
+    config,
+    "request_form_submit",
+    {
+      requireRegistered: true,
+      targetFormId: args.formId,
+    }
+  );
+  if (!submitAccess.ok && !hasPendingInterruptResume(config)) {
+    return submitAccess.message;
+  }
+
+  const validation = emitFrontendActionRequest(
+    config,
+    "validate_active_form",
+    { formId: args.formId },
+    { requireRegistered: true, targetFormId: args.formId },
+    interruptFn
+  );
+  if (!validation.ok) return validation.message;
+
+  const validationFailure = normalizedValidationFailure(validation.resume);
+  if (validationFailure) return validationFailure.message;
+
+  const approvalResume = interruptFn({
+    actionRequests: [
+      {
+        name: "request_form_submit",
+        args: actionArgs,
+        description:
+          "Review and approve this AMS form action. The active form has already passed frontend validation. Final backend validation and permissions still apply.",
+      },
+    ],
+    reviewConfigs: [
+      {
+        actionName: "request_form_submit",
+        allowedDecisions: ["approve", "reject"],
+      },
+    ],
+  });
+
+  if (!isApprovedHitlResume(approvalResume)) {
+    return rejectedHitlMessage(approvalResume);
+  }
+
+  const submit = emitFrontendActionRequest(
+    config,
+    "request_form_submit",
+    actionArgs,
+    {
+      requireRegistered: true,
+      targetFormId: args.formId,
+    },
+    interruptFn
+  );
+  if (!submit.ok) return submit.message;
+  return formatFrontendActionResult("request_form_submit", submit.resume);
 }
 
 function renderResult(value: unknown): string {
@@ -441,7 +636,7 @@ export function formatFrontendActionResult(
         ? `REGISTER_OPTION_QUERY_MISMATCH: ${field} register fields use register numbers/codes, not item-name options. Query${query ? ` "${query}"` : ""} did not match any register identifier, but ${totalCount} register option(s) exist. Resolve and set ${field.replace(/\.(?:stock_register|central_register)$/, ".item")} and required parent fields first if needed, then search ${field} by register number/code or use an empty query to list available registers. Do not ask the user to create the item just because the register query used an item name.`
         : undefined,
       isEmptyOptionResult
-        ? `EMPTY_OPTIONS: the active form has no available options${field ? ` for ${field}` : ""}. Do not guess an ID or use SQL to bypass the form. Tell the user this option does not exist yet, and offer to help create it — use OpenUI with a Button to navigate to the relevant create form (e.g., location_create, category_create, item_create). Check module manifest and permissions to determine which create form to offer.`
+        ? `EMPTY_OPTIONS: the active form has no available options${field ? ` for ${field}` : ""}. Do not guess an ID or bypass the form. Tell the user this option does not exist yet, and offer to help create it — use OpenUI with a Button to navigate to the relevant create form (e.g., location_create, category_create, item_create). Check module manifest and permissions to determine which create form to offer.`
         : undefined,
       isOptionNotFoundResult && !isInstanceOptionQueryMismatch && !isBatchOptionQueryMismatch && !isRegisterOptionQueryMismatch
         ? `OPTION_NOT_FOUND: requested option${query ? ` "${query}"` : ""} is not available${field ? ` for ${field}` : ""}.${candidateSummary ? ` Available alternatives: ${candidateSummary}.` : ""}${typeof totalCount === "number" ? ` (${totalCount} option(s) exist)` : ""} Do not guess an ID or silently substitute a default. Present the available alternatives to the user using OpenUI (Buttons or a compact list). Also offer to create${query ? ` "${query}"` : " the missing option"} if the user has the required capability — use a Button that navigates to the relevant create form.`
@@ -453,7 +648,7 @@ export function formatFrontendActionResult(
         ? `OPTION_DEPENDENCIES_MISSING: cannot search${field ? ` ${field}` : " this field"} yet.${missingDependencies.length > 0 ? ` Fill these first: ${renderResult(missingDependencies)}.` : ""} Fill the dependency field(s) using set_form_values, then retry the search.`
         : undefined,
       isInvalidSelectValue
-        ? "NON_RETRYABLE_INVALID_SELECT_VALUE: one or more select fields used values that are not available in the active form options. Do not retry, do not guess an ID, and do not use SQL to bypass the form. The missing option must be created or enabled first, or the user must choose an existing option."
+        ? "NON_RETRYABLE_INVALID_SELECT_VALUE: one or more select fields used values that are not available in the active form options. Do not retry, do not guess an ID, and do not bypass the form. The missing option must be created or enabled first, or the user must choose an existing option."
         : undefined,
       isInvalidFormValuesSchema
         ? isRootFormValuesSchemaError
@@ -556,7 +751,7 @@ export const searchFormOptions = tool(
       "For batch fields such as items.0.batch, first resolve/set the row item via items.0.item; then search batches by batch number, or use an empty query to list available batches. Do not search a batch field with the item name. " +
       "For instance fields such as items.0.instances, first resolve/set the row item via items.0.item; then search instances by serial number/QR code, or use an empty query to list available instances. Do not search an instance field with the item name. " +
       "For register fields such as items.0.stock_register or items.0.central_register, search by register number/code, or use an empty query to list available registers. Do not search a register field with the item name. " +
-      "Treat not_found, ambiguous, missing_dependencies, empty options, or no selected value as a hard blocker: do not guess option IDs, dropdown indexes, hidden values, use SQL to bypass the form, or rely on a default/current/auto-selected value unless it exactly matches the user's requested option. " +
+      "Treat not_found, ambiguous, missing_dependencies, empty options, or no selected value as a hard blocker: do not guess option IDs, dropdown indexes, hidden values, bypass the form, or rely on a default/current/auto-selected value unless it exactly matches the user's requested option. " +
       "Do not use this for free-text fields, broad database reporting, submitting forms, or actions not tied to the active form.",
     schema: searchFormOptionsArgsSchema,
   }
@@ -564,18 +759,7 @@ export const searchFormOptions = tool(
 
 export const requestFormSubmit = tool(
   async ({ formId, intent }, config) => {
-    const result = emitFrontendAction(
-      config,
-      "request_form_submit",
-      {
-        formId,
-        intent,
-      },
-      {
-        requireRegistered: true,
-      }
-    );
-    return result.message;
+    return requestFormSubmitWithPreflight(config, { formId, intent });
   },
   {
     name: "request_form_submit",
@@ -585,7 +769,7 @@ export const requestFormSubmit = tool(
       "For inspection workflow commands such as initiate, submit, approve, move to next stage, " +
       'or send it to the next stage, use intent "submit" against the active inspection detail/stage form. ' +
       'Use intent "save" only for saving progress. Do not use this if a requested option is unresolved, not_found, ambiguous, missing, or only satisfied by a default/current/auto-selected value that does not exactly match the user request. ' +
-      "Do not use this to bypass set_form_values errors, stale form context, missing permissions, or missing required fields. This requires human approval before execution. " +
+      "Do not use this to bypass set_form_values errors, stale form context, missing permissions, or missing required fields. This first runs frontend validation; human approval is requested only if that validation passes. " +
       "The frontend and backend still enforce permissions and validation.",
     schema: z.object({
       formId: z

@@ -47,8 +47,8 @@ const CodeHeader: FC<CodeHeaderProps> = ({ language, code }) => {
   };
 
   return (
-    <div className="flex items-center justify-between gap-4 rounded-t-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white">
-      <span className="lowercase [&>span]:text-xs">{language}</span>
+    <div className="flex min-w-0 items-center justify-between gap-4 rounded-t-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white">
+      <span className="min-w-0 truncate lowercase [&>span]:text-xs">{language}</span>
       <TooltipIconButton tooltip="Copy" onClick={onCopy}>
         {!isCopied && <CopyIcon />}
         {isCopied && <CheckIcon />}
@@ -146,10 +146,10 @@ const defaultComponents: any = {
     <hr className={cn("my-5 border-b", className)} {...props} />
   ),
   table: ({ className, ...props }: { className?: string }) => (
-    <div className="my-5 w-full overflow-x-auto">
+    <div className="my-5 w-full min-w-0 max-w-full overflow-x-auto">
       <table
         className={cn(
-          "w-full border-separate border-spacing-0",
+          "w-full table-fixed border-separate border-spacing-0",
           className,
         )}
         {...props}
@@ -159,7 +159,7 @@ const defaultComponents: any = {
   th: ({ className, ...props }: { className?: string }) => (
     <th
       className={cn(
-        "bg-muted px-4 py-2 text-left font-bold first:rounded-tl-lg last:rounded-tr-lg [&[align=center]]:text-center [&[align=right]]:text-right",
+        "bg-muted px-4 py-2 text-left font-bold first:rounded-tl-lg last:rounded-tr-lg [&[align=center]]:text-center [&[align=right]]:text-right break-all",
         className,
       )}
       {...props}
@@ -168,7 +168,7 @@ const defaultComponents: any = {
   td: ({ className, ...props }: { className?: string }) => (
     <td
       className={cn(
-        "border-b border-l px-4 py-2 text-left last:border-r [&[align=center]]:text-center [&[align=right]]:text-right break-words",
+        "border-b border-l px-4 py-2 text-left last:border-r [&[align=center]]:text-center [&[align=right]]:text-right break-all",
         className,
       )}
       {...props}
@@ -192,7 +192,7 @@ const defaultComponents: any = {
   pre: ({ className, ...props }: { className?: string }) => (
     <pre
       className={cn(
-        "overflow-x-auto rounded-lg bg-black text-white max-w-full",
+        "max-w-full min-w-0 overflow-x-auto rounded-lg bg-black text-white",
         className,
       )}
       {...props}
@@ -223,7 +223,7 @@ const defaultComponents: any = {
     }
 
     return (
-      <code className={cn("rounded font-semibold", className)} {...props}>
+      <code className={cn("rounded font-semibold break-all", className)} {...props}>
         {children}
       </code>
     );
@@ -232,7 +232,7 @@ const defaultComponents: any = {
 
 const MarkdownTextImpl: FC<{ children: string }> = ({ children }) => {
   return (
-    <div className="markdown-content">
+    <div className="markdown-content w-full min-w-0 max-w-full">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}

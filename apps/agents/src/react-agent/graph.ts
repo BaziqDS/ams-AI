@@ -7,7 +7,6 @@ import {
   todoListMiddleware,
 } from "langchain";
 
-import { formSubmitApprovalMiddleware } from "./approval-middleware.js";
 import { frontendFailureGuardMiddleware } from "./frontend-failure-guard.js";
 import {
   buildGroqChatModelConfig,
@@ -60,7 +59,6 @@ const agent = createAgent({
       exitBehavior: "end",
     }),
     todoListMiddleware(),
-    formSubmitApprovalMiddleware,
     frontendFailureGuardMiddleware,
     contextEditingMiddleware(),
   ],

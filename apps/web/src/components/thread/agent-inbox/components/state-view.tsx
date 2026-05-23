@@ -43,7 +43,7 @@ const messageTypeToLabel = (message: BaseMessage) => {
 
 function MessagesRenderer({ messages }: { messages: BaseMessage[] }) {
   return (
-    <div className="flex flex-col gap-1 w-full">
+    <div className="flex w-full min-w-0 max-w-full flex-col gap-1 overflow-hidden">
       {messages.map((msg, idx) => {
         const messageTypeLabel = messageTypeToLabel(msg);
         const content =
@@ -53,12 +53,12 @@ function MessagesRenderer({ messages }: { messages: BaseMessage[] }) {
         return (
           <div
             key={msg.id ?? `message-${idx}`}
-            className="flex flex-col gap-[2px] ml-2 w-full"
+            className="ml-2 flex w-full min-w-0 max-w-full flex-col gap-[2px] overflow-hidden"
           >
             <p className="font-medium text-gray-700">{messageTypeLabel}:</p>
             {content && <MarkdownText>{content}</MarkdownText>}
             {"tool_calls" in msg && msg.tool_calls ? (
-              <div className="flex flex-col gap-1 items-start w-full">
+              <div className="flex w-full min-w-0 flex-col items-start gap-1">
                 {(msg.tool_calls as ToolCall[]).map((tc, idx) => (
                   <ToolCallTable
                     key={tc.id ?? `tool-call-${idx}`}
@@ -99,14 +99,14 @@ function StateViewRecursive(props: StateViewRecursiveProps) {
 
     const valueArray = props.value as unknown[];
     return (
-      <div className="flex flex-row gap-1 items-start justify-start w-full">
+      <div className="flex w-full min-w-0 flex-row flex-wrap items-start justify-start gap-1 overflow-hidden">
         <span className="font-normal text-black">[</span>
         {valueArray.map((item, idx) => {
           const itemRenderValue = baseMessageObject(item);
           return (
             <div
               key={`state-view-${idx}`}
-              className="flex flex-row items-start whitespace-pre-wrap w-full"
+              className="flex min-w-0 flex-row items-start whitespace-pre-wrap w-full"
             >
               <StateViewRecursive value={itemRenderValue} />
               {idx < valueArray?.length - 1 && (
@@ -125,14 +125,14 @@ function StateViewRecursive(props: StateViewRecursiveProps) {
       return <p className="font-light text-gray-600">{"{}"}</p>;
     }
     return (
-      <div className="flex flex-col gap-1 items-start justify-start ml-6 relative w-full">
+      <div className="relative ml-6 flex w-full min-w-0 max-w-full flex-col items-start justify-start gap-1 overflow-hidden">
         {/* Vertical line */}
         <div className="absolute left-[-24px] top-0 h-full w-[1px] bg-gray-200" />
 
         {Object.entries(props.value).map(([key, value], idx) => (
           <div
             key={`state-view-object-${key}-${idx}`}
-            className="relative w-full"
+            className="relative w-full min-w-0"
           >
             {/* Horizontal connector line */}
             <div className="absolute left-[-20px] top-[10px] h-[1px] w-[18px] bg-gray-200" />
@@ -184,7 +184,7 @@ export function StateViewObject(props: StateViewProps) {
   }, [props.expanded]);
 
   return (
-    <div className="flex flex-row gap-2 items-start justify-start relative text-sm">
+    <div className="relative flex w-full min-w-0 flex-row items-start justify-start gap-2 overflow-hidden text-sm">
       <motion.div
         initial={false}
         animate={{ rotate: expanded ? 90 : 0 }}
@@ -197,8 +197,8 @@ export function StateViewObject(props: StateViewProps) {
           <ChevronRight className="w-4 h-4" />
         </div>
       </motion.div>
-      <div className="flex flex-col gap-1 items-start justify-start w-full">
-        <p className="text-black font-normal">
+      <div className="flex w-full min-w-0 flex-col items-start justify-start gap-1">
+        <p className="max-w-full break-all font-normal text-black">
           {prettifyText(props.keyName)}{" "}
           {!expanded && (
             <HasContentsEllipsis onClick={() => setExpanded((prev) => !prev)} />
@@ -215,7 +215,7 @@ export function StateViewObject(props: StateViewProps) {
             ease: "easeInOut",
           }}
           style={{ overflow: "hidden" }}
-          className="relative w-full"
+          className="relative w-full min-w-0"
         >
           <StateViewRecursive expanded={props.expanded} value={props.value} />
         </motion.div>
@@ -246,20 +246,20 @@ export function StateView({
   return (
     <div
       className={cn(
-        "flex flex-row gap-0 w-full",
+        "flex w-full min-w-0 flex-row gap-0 overflow-hidden",
         view === "state" &&
           "border-t-[1px] lg:border-t-[0px] lg:border-l-[1px] border-gray-100 ",
       )}
     >
       {view === "description" && (
-        <div className="pt-6 pb-2">
+        <div className="min-w-0 pb-2 pt-6">
           <MarkdownText>
             {description ?? "No description provided"}
           </MarkdownText>
         </div>
       )}
       {view === "state" && (
-        <div className="flex flex-col items-start justify-start gap-1">
+        <div className="flex min-w-0 flex-col items-start justify-start gap-1">
           {Object.entries(values).map(([k, v], idx) => (
             <StateViewObject
               expanded={expanded}
@@ -270,7 +270,7 @@ export function StateView({
           ))}
         </div>
       )}
-      <div className="flex gap-2 items-start justify-end">
+      <div className="flex flex-wrap items-start justify-end gap-2">
         {view === "state" && (
           <Button
             onClick={() => setExpanded((prev) => !prev)}

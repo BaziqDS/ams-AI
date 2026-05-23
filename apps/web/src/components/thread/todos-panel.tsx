@@ -60,7 +60,7 @@ export function TodosPanel({
   return (
     <section
       className={cn(
-        "relative z-10 overflow-hidden bg-background",
+        "relative z-10 min-w-0 max-w-full overflow-hidden bg-background",
         attached
           ? "w-full border-b"
           : "mx-auto w-full max-w-3xl rounded-xl border shadow-xs",
@@ -70,7 +70,7 @@ export function TodosPanel({
       <button
         type="button"
         className={cn(
-          "flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-muted/60",
+          "flex w-full min-w-0 items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-muted/60",
           expanded && "border-b",
         )}
         aria-expanded={expanded}
@@ -107,7 +107,7 @@ export function TodosPanel({
       </button>
 
       {expanded ? (
-        <div className="max-h-44 overflow-y-auto px-2 py-1.5">
+        <div className="max-h-44 min-w-0 overflow-y-auto overflow-x-hidden px-2 py-1.5">
           {orderedTodos(todos).map((todo, index) => {
             const status = String(todo.status);
             return (
@@ -123,7 +123,7 @@ export function TodosPanel({
                 <div className="min-w-0 flex-1">
                   <div
                     className={cn(
-                      "break-words leading-snug",
+                      "break-words break-all leading-snug",
                       status === "completed" && "line-through decoration-muted-foreground/60",
                     )}
                   >

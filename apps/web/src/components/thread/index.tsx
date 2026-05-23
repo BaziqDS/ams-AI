@@ -634,7 +634,7 @@ export function Thread() {
               "absolute pl-4 pr-[18px] top-0 left-0 right-0 bottom-[64px] overflow-y-auto [&::-webkit-scrollbar]:w-[5px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-track]:my-3",
               "grid grid-rows-[1fr_auto]",
             )}
-            contentClassName="pt-8 pb-16  max-w-3xl mx-auto flex flex-col gap-4 w-full"
+            contentClassName="pt-8 pb-16 max-w-3xl mx-auto flex flex-col gap-4 w-full min-w-0"
             content={
               <>
                 {renderableMessages
@@ -682,14 +682,14 @@ export function Thread() {
 
                 <ScrollToBottom className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 animate-in fade-in-0 zoom-in-95" />
 
-                <div className="w-full max-w-3xl mx-auto relative z-10">
+                <div className="w-full max-w-3xl min-w-0 mx-auto relative z-10">
                   {contextLabel ? (
                     <div className="ams-context-chip" aria-label="Current AI context">
                       <span className="ams-context-chip-dot" aria-hidden="true" />
                       <span className="ams-context-chip-text">{contextLabel}</span>
                     </div>
                   ) : null}
-                <div className={`ams-chat-input-box bg-background border w-full ${contextLabel ? "rounded-tr-[18px] rounded-b-[18px] rounded-tl-none" : "rounded-[18px]"}`}>
+                <div className={`ams-chat-input-box bg-background border w-full min-w-0 max-w-full overflow-hidden ${contextLabel ? "rounded-tr-[18px] rounded-b-[18px] rounded-tl-none" : "rounded-[18px]"}`}>
                   <TodosPanel
                     todos={todos}
                     expanded={showTodos}
@@ -698,7 +698,7 @@ export function Thread() {
                   />
                   <form
                     onSubmit={handleSubmit}
-                    className="grid grid-rows-[1fr_auto] gap-1 max-w-3xl mx-auto"
+                    className="grid min-w-0 grid-rows-[1fr_auto] gap-1 max-w-3xl mx-auto"
                   >
                     <textarea
                       value={input}

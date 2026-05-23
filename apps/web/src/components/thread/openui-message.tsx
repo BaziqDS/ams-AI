@@ -3,20 +3,13 @@
 import { Component, type ErrorInfo, type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Renderer } from "@openuidev/react-lang";
-import type {
-  ActionEvent,
-  ParseResult,
-} from "@openuidev/react-lang";
+import type { ActionEvent } from "@openuidev/react-lang";
 import {
   defaultLightTheme,
   ThemeProvider,
 } from "@openuidev/react-ui";
 import { amsOpenUiLibrary } from "@/lib/ams-openui";
 import { copilotBridge } from "@/lib/copilot-bridge";
-import {
-  formatOpenUiErrors,
-  formatOpenUiParseDiagnostics,
-} from "@/lib/openui-diagnostics";
 
 function stripOpenUiFence(content: string) {
   const trimmed = content.trim();
@@ -51,20 +44,6 @@ class OpenUiErrorBoundary extends Component<
   }
 }
 
-function reportOpenUiParseResult(result: ParseResult | null) {
-  if (!result) return;
-
-  const { errors, unresolved, orphaned } = result.meta;
-  if (!errors.length && !unresolved.length && !orphaned.length) return;
-
-  console.warn("OpenUI parse diagnostics", {
-    statementCount: result.meta.statementCount,
-    unresolved,
-    orphaned,
-    errors,
-  });
-}
-
 const openUiToolProvider = {
   get_page_context: async () => copilotBridge.getFreshContext(),
 };
@@ -74,13 +53,11 @@ export function OpenUiAssistantMessage({
   fallback,
   isStreaming,
   onAction,
-  onDiagnostics,
 }: {
   code: string;
   fallback: ReactNode;
   isStreaming: boolean;
   onAction?: (event: ActionEvent) => void;
-  onDiagnostics?: (diagnostics: string) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -105,11 +82,6 @@ export function OpenUiAssistantMessage({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isExpanded]);
-
-  const notifyDiagnostics = (diagnostics: string) => {
-    if (!diagnostics || isStreaming || !onDiagnostics) return;
-    window.setTimeout(() => onDiagnostics(diagnostics), 0);
-  };
 
   return (
     <OpenUiErrorBoundary fallback={fallback}>
@@ -139,17 +111,6 @@ export function OpenUiAssistantMessage({
               isStreaming={isStreaming}
               onAction={onAction}
               toolProvider={openUiToolProvider}
-              onError={(errors) => {
-                if (errors.length) {
-                  const diagnostics = formatOpenUiErrors(errors);
-                  console.warn("OpenUI validation errors", diagnostics);
-                  notifyDiagnostics(diagnostics);
-                }
-              }}
-              onParseResult={(result) => {
-                reportOpenUiParseResult(result);
-                notifyDiagnostics(formatOpenUiParseDiagnostics(result));
-              }}
             />
           </ThemeProvider>
         </div>

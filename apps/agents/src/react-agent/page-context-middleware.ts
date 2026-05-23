@@ -97,6 +97,31 @@ function safeStringify(value: unknown, maxLength = 2000): string {
   }
 }
 
+/** Render a primitive cell for human-readable row/key lines. */
+function renderPrimitive(value: unknown): string {
+  if (value === null) return "null";
+  if (value === undefined) return "undefined";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "[]";
+    if (value.every((v) => typeof v === "string" || typeof v === "number")) {
+      return `[${value.join(", ")}]`;
+    }
+    return safeStringify(value, 200);
+  }
+  if (isObject(value)) {
+    // Compact key: value form for small objects (e.g. available_actions).
+    const entries = Object.entries(value)
+      .slice(0, 4)
+      .map(([k, v]) => `${k}=${renderPrimitive(v)}`);
+    return `{${entries.join(", ")}${Object.keys(value).length > 4 ? ", ..." : ""}}`;
+  }
+  return String(value);
+}
+
 function findReadable(readables: Readable[], id: string): unknown {
   return readables.find((r) => r.id === id)?.value;
 }
@@ -170,8 +195,12 @@ function filterReadablesForCurrentRoute(
   });
 }
 
-function summarizeVisibleRow(row: unknown): unknown {
-  if (!isObject(row)) return row;
+/**
+ * Build a key=value summary for a visible list row.
+ * Replaces the old raw-JSON dump format with a readable line.
+ */
+function renderRowSummary(row: unknown): string {
+  if (!isObject(row)) return renderPrimitive(row);
 
   const preferredKeys = [
     "row_number",
@@ -195,15 +224,23 @@ function summarizeVisibleRow(row: unknown): unknown {
     "available_actions",
   ];
 
-  const summary: Record<string, unknown> = {};
+  const parts: string[] = [];
+  const used = new Set<string>();
   for (const key of preferredKeys) {
-    if (key in row) summary[key] = row[key];
+    if (key in row) {
+      parts.push(`${key}=${renderPrimitive(row[key])}`);
+      used.add(key);
+    }
   }
 
-  if (Object.keys(summary).length === 0) {
-    return Object.fromEntries(Object.entries(row).slice(0, 12));
+  if (parts.length === 0) {
+    for (const [key, value] of Object.entries(row).slice(0, 12)) {
+      parts.push(`${key}=${renderPrimitive(value)}`);
+      used.add(key);
+    }
   }
-  return summary;
+
+  return parts.join(", ");
 }
 
 function formatListReadables(readables: Readable[], currentPath: string | null): string[] {
@@ -214,7 +251,7 @@ function formatListReadables(readables: Readable[], currentPath: string | null):
 
   const lines: string[] = ["", "## VISIBLE PAGE ROWS"];
   lines.push(
-    "Use these rows to resolve references like \"this one\", \"the first one\", \"the second row\", or visible names/codes before using SQL.",
+    "Use these rows to resolve references like \"this one\", \"the first one\", \"the second row\", or visible names/codes.",
   );
 
   for (const readable of chosen.slice(0, 3)) {
@@ -231,17 +268,18 @@ function formatListReadables(readables: Readable[], currentPath: string | null):
     const page = pagination?.page ? ` page ${String(pagination.page)}` : "";
 
     lines.push("");
-    lines.push(`- ${readable.description}`);
+    lines.push(`<visible_list route="${route}" visible_rows="${visibleRows.length}" filtered_total="${total}"${page ? ` pagination="page ${String(pagination?.page)}"` : ""}>`);
+    lines.push(`  description: ${readable.description}`);
     lines.push(`  route: ${route}; visible rows: ${visibleRows.length}; filtered total: ${total}${page}`);
-    lines.push("  visible_rows:");
 
     visibleRows.slice(0, 12).forEach((row, index) => {
-      lines.push(`    ${index + 1}. ${safeStringify(summarizeVisibleRow(row), 900)}`);
+      lines.push(`  ${index + 1}. ${renderRowSummary(row)}`);
     });
 
     if (visibleRows.length > 12) {
-      lines.push(`    ... ${visibleRows.length - 12} more visible rows not shown`);
+      lines.push(`  ... ${visibleRows.length - 12} more visible rows not shown`);
     }
+    lines.push(`</visible_list>`);
   }
 
   return lines;
@@ -254,7 +292,7 @@ function formatDetailReadables(readables: Readable[], currentPath: string | null
   const chosen = preferCurrentRouteReadables(detailReadables, currentPath);
   const lines: string[] = ["", "## DETAIL PAGE CONTEXT"];
   lines.push(
-    "Use this detail context before SQL for questions about the current record, its related rows, workflow, documents, distribution, or page-specific summary.",
+    "Use this detail context as the primary source for questions about the current record, its related rows, workflow, documents, distribution, or page-specific summary.",
   );
 
   for (const readable of chosen.slice(0, 3)) {
@@ -262,7 +300,8 @@ function formatDetailReadables(readables: Readable[], currentPath: string | null
     const route = readableRoute(readable) ?? "unknown route";
     const entity = typeof value.entity === "string" ? value.entity : "unknown entity";
     lines.push("");
-    lines.push(`- ${readable.description}`);
+    lines.push(`<detail_page route="${route}" entity="${entity}">`);
+    lines.push(`  description: ${readable.description}`);
     lines.push(`  route: ${route}; entity: ${entity}`);
     lines.push(
       `  context: ${safeStringify(
@@ -274,6 +313,7 @@ function formatDetailReadables(readables: Readable[], currentPath: string | null
         3500,
       )}`,
     );
+    lines.push(`</detail_page>`);
   }
 
   return lines;
@@ -286,13 +326,14 @@ function formatSupportingReadables(readables: Readable[], currentPath: string | 
   const chosen = preferCurrentRouteReadables(supportingReadables, currentPath);
   const lines: string[] = ["", "## SUPPORTING PAGE CONTEXT"];
   lines.push(
-    "Use these route-scoped catalogs, option lists, summaries, and helper context before SQL when resolving IDs or explaining the current page.",
+    "Use these route-scoped catalogs, option lists, summaries, and helper context when resolving IDs or explaining the current page.",
   );
 
   for (const readable of chosen.slice(0, 3)) {
     const route = readableRoute(readable) ?? "unknown route";
     lines.push("");
-    lines.push(`- ${readable.description}`);
+    lines.push(`<supporting_context route="${route}">`);
+    lines.push(`  description: ${readable.description}`);
     lines.push(`  route: ${route}`);
     lines.push(
       `  context: ${safeStringify(
@@ -304,6 +345,7 @@ function formatSupportingReadables(readables: Readable[], currentPath: string | 
         2500,
       )}`,
     );
+    lines.push(`</supporting_context>`);
   }
 
   return lines;
@@ -324,7 +366,7 @@ function describeChange(change: unknown): string | null {
     const lines = fields
       .map(
         (f: string) =>
-          `    • ${f}: "${safeStringify(prev[f], 100)}" → "${safeStringify(curr[f], 100)}"`,
+          `      • ${f}: "${safeStringify(prev[f], 100)}" → "${safeStringify(curr[f], 100)}"`,
       )
       .join("\n");
     return `${fields.length} fields changed at ${at}:\n${lines}`;
@@ -470,33 +512,42 @@ function formatActiveForm(formReadables: unknown[]): string[] {
     const activeForm = isObject(readable.activeForm) ? readable.activeForm : null;
     if (!activeForm) continue;
 
+    const title = String(activeForm.title ?? activeForm.formId);
+    const formId = String(activeForm.formId);
+    const mode = activeForm.mode ? String(activeForm.mode) : "";
+
     lines.push("");
-    lines.push(`## ACTIVE FORM: ${String(activeForm.title ?? activeForm.formId)}`);
-    lines.push(`- formId: ${String(activeForm.formId)}`);
-    if (activeForm.mode) lines.push(`- mode: ${String(activeForm.mode)}`);
+    lines.push(`## ACTIVE FORM: ${title}`);
+    lines.push(`<active_form form_id="${formId}" title="${title}"${mode ? ` mode="${mode}"` : ""}>`);
+    lines.push(`- formId: ${formId}`);
+    if (mode) lines.push(`- mode: ${mode}`);
 
     const workflowGuidance = typeof activeForm.formId === "string"
       ? getFormWorkflowGuidance(activeForm.formId)
       : null;
     if (workflowGuidance) {
       lines.push("");
+      lines.push("<workflow_guidance>");
       lines.push(workflowGuidance);
+      lines.push("</workflow_guidance>");
       lines.push("");
     }
     if (Array.isArray(activeForm.fields) && activeForm.fields.length > 0) {
-      lines.push("- Writable field schema (ONLY these exact names are fillable with set_form_values):");
+      lines.push("<writable_fields>");
+      lines.push("Writable field schema (ONLY these exact names are fillable with set_form_values):");
       activeForm.fields
         .map(formatField)
         .filter((field): field is string => Boolean(field))
         .slice(0, 40)
-        .forEach((field) => lines.push(`    • ${field}`));
+        .forEach((field) => lines.push(`  - ${field}`));
       if (activeForm.fields.length > 40) {
-        lines.push(`    • ... ${activeForm.fields.length - 40} more writable fields not shown`);
+        lines.push(`  - ... ${activeForm.fields.length - 40} more writable fields not shown`);
       }
       const deferredSummary = formatDeferredFieldsSummary(activeForm.fields as unknown[]);
       if (deferredSummary) {
-        lines.push(`- ${deferredSummary}`);
+        lines.push(`  ${deferredSummary}`);
       }
+      lines.push("</writable_fields>");
     } else {
       lines.push("- Writable field schema: none currently exposed.");
     }
@@ -533,11 +584,13 @@ function formatActiveForm(formReadables: unknown[]): string[] {
 
     if (userEdit) {
       lines.push("");
+      lines.push("<user_manual_override>");
       lines.push("⚠️ USER MANUAL OVERRIDE — TRUST THIS, NOT YOUR MEMORY:");
-      lines.push(`   ${userEdit}`);
+      lines.push(`  ${userEdit}`);
       lines.push(
-        "   The user edited the above AFTER any value you may have set. The 'Current values' above are the truth. Do not reference older values from earlier in this conversation.",
+        "  The user edited the above AFTER any value you may have set. The 'Current values' above are the truth. Do not reference older values from earlier in this conversation.",
       );
+      lines.push("</user_manual_override>");
     }
 
     if (assistantEdit) {
@@ -553,6 +606,8 @@ function formatActiveForm(formReadables: unknown[]): string[] {
         lines.push(`- Allowed form actions: ${allowed.join(", ")}`);
       }
     }
+
+    lines.push(`</active_form>`);
   }
 
   return lines;
@@ -560,7 +615,7 @@ function formatActiveForm(formReadables: unknown[]): string[] {
 
 function formatActivity(activity: unknown): string[] {
   if (!isObject(activity)) return [];
-  const lines: string[] = ["", "## RECENT ACTIVITY"];
+  const lines: string[] = ["", "## RECENT ACTIVITY", "<recent_activity>"];
 
   const currentPage = isObject(activity.currentPage) ? activity.currentPage : null;
   if (currentPage?.pathname) {
@@ -611,12 +666,13 @@ function formatActivity(activity: unknown): string[] {
     }
   }
 
+  lines.push("</recent_activity>");
   return lines;
 }
 
 function formatPermissions(perms: unknown, actions: ActionDef[]): string[] {
   if (!isObject(perms)) return [];
-  const lines: string[] = ["", "## PERMISSIONS"];
+  const lines: string[] = ["", "## PERMISSIONS", "<permissions>"];
 
   const user = isObject(perms.user) ? perms.user : null;
   if (user?.is_superuser) {
@@ -659,6 +715,7 @@ function formatPermissions(perms: unknown, actions: ActionDef[]): string[] {
     }
   }
 
+  lines.push("</permissions>");
   return lines;
 }
 
@@ -695,8 +752,8 @@ export function formatPageContextForPrompt(ctx: PageContext | undefined): string
   const header = [
     "",
     "",
-    "==================== LIVE PAGE STATE ====================",
-    "This section reflects the user's browser RIGHT NOW. It is the authoritative source of truth.",
+    "<live_page_state>",
+    "This block reflects the user's browser RIGHT NOW. It is the authoritative source of truth.",
     "If anything here contradicts something you said earlier in this chat, TRUST THIS, not your memory.",
     "If you set a field and the user changed it, the user's value wins — never re-assert your old value.",
     "",
@@ -720,7 +777,7 @@ export function formatPageContextForPrompt(ctx: PageContext | undefined): string
 
   const footer = [
     "",
-    "==================== END LIVE PAGE STATE ====================",
+    "</live_page_state>",
   ];
 
   return [...header, ...body, ...footer].join("\n");
@@ -731,8 +788,10 @@ export function formatPageContextForPrompt(ctx: PageContext | undefined): string
  * and appends a structured "LIVE PAGE STATE" block to the system prompt.
  * The user never sees this — it only goes to the LLM.
  *
- * The block is formatted to surface user manual overrides, allowed/blocked
- * actions, and recent activity so the LLM cannot drift toward stale memory.
+ * The block is formatted with XML-style tags so the LLM can distinguish
+ * route info, active form schema, visible rows, detail context, recent
+ * activity, and permissions cleanly. Inside each tag the layout is
+ * human-readable key:value lines instead of raw JSON dumps.
  */
 export const pageContextMiddleware = dynamicSystemPromptMiddleware(
   (_state, runtime) => {

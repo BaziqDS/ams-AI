@@ -107,35 +107,62 @@ const AMS_COPILOT_MODULES: ModuleContract[] = [
   },
 ];
 
-function formatForm(contract: CreateFormContract) {
-  const scope = contract.samePageOnly
-    ? `same-page only on ${contract.routePattern}`
-    : `cross-page route ${contract.route}`;
-  const capability = contract.requiredCapability
-    ? `; requires ${contract.requiredCapability}`
-    : "";
-  return `${contract.formId} (${scope}${capability})`;
+function formatForm(contract: CreateFormContract): string {
+  const attrs: string[] = [`form_id="${contract.formId}"`];
+  if (contract.samePageOnly) {
+    attrs.push(`scope="same-page"`);
+    if (contract.routePattern) {
+      attrs.push(`parent_route="${contract.routePattern}"`);
+    }
+  } else {
+    attrs.push(`scope="cross-page"`);
+    if (contract.route) {
+      attrs.push(`route="${contract.route}"`);
+    }
+  }
+  if (contract.requiredCapability) {
+    attrs.push(`requires="${contract.requiredCapability}"`);
+  }
+  return `    <form ${attrs.join(" ")}/>`;
 }
 
-function formatModule(module: ModuleContract) {
-  const forms = [
-    module.createForm ? formatForm(module.createForm) : null,
-    ...(module.scopedForms ?? []).map(formatForm),
-  ].filter(Boolean);
+function formatModule(module: ModuleContract): string {
+  const attrs: string[] = [
+    `name="${module.label}"`,
+    `list_route="${module.listRoute}"`,
+    `detail_route="${module.detailRoutePattern}"`,
+  ];
+  if (module.viewCapability) {
+    attrs.push(`view_capability="${module.viewCapability}"`);
+  }
 
-  return [
-    `- ${module.label}: list ${module.listRoute}; detail ${module.detailRoutePattern}${
-      module.viewCapability ? `; view capability ${module.viewCapability}` : ""
-    }.`,
-    forms.length > 0
-      ? `  Forms opened through run_frontend_action("open_form"): ${forms.join("; ")}.`
-      : "  No create form is exposed through the compact module manifest.",
-  ].join("\n");
+  const forms: string[] = [];
+  if (module.createForm) forms.push(formatForm(module.createForm));
+  for (const scoped of module.scopedForms ?? []) {
+    forms.push(formatForm(scoped));
+  }
+
+  if (forms.length === 0) {
+    return `  <module ${attrs.join(" ")}>
+    <!-- no create form exposed through the compact manifest -->
+  </module>`;
+  }
+
+  return `  <module ${attrs.join(" ")}>
+${forms.join("\n")}
+  </module>`;
 }
 
-export const AMS_MODULE_CONTRACTS_PROMPT = `AMS COPILOT MODULE MANIFEST (COMPACT):
+export const AMS_MODULE_CONTRACTS_PROMPT = `<module_manifest>
+AMS COPILOT MODULE MANIFEST (COMPACT):
+
 This is a compact routing/action summary only. The current live page state is authoritative for visible rows, detail records, active form schema, writable fields, dropdown options, workflow stage, permissions, and allowed/blocked frontend actions.
 
-${AMS_COPILOT_MODULES.map(formatModule).join("\n")}
+Each <form> is opened through run_frontend_action with name "open_form" and args { form_id: "..." }. A scope="cross-page" form handles BOTH navigation and modal open in one call. A scope="same-page" form requires you to navigate to its parent_route first, then open it on the next turn.
 
-Production rule: use this compact manifest only to choose high-level navigation/open_form targets. Use LIVE PAGE STATE and registered frontend actions for page-specific data, form filling, workflow, validation, and permissions. Use SQL only for read/reporting questions or when live context does not contain the referenced record.`;
+<modules>
+${AMS_COPILOT_MODULES.map(formatModule).join("\n")}
+</modules>
+
+Production rule: use this compact manifest only to choose high-level navigation/open_form targets. Use LIVE PAGE STATE and registered frontend actions for page-specific data, form filling, workflow, validation, and permissions. If live context does not contain the referenced record, use registered navigation, filters, or row-open actions when available; otherwise ask the user to open or filter the relevant AMS page.
+</module_manifest>`;

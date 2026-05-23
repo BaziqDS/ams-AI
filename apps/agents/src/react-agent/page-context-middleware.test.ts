@@ -53,9 +53,10 @@ test("page context prompt includes visible rows for current list page", () => {
 
   assert.match(prompt, /## VISIBLE PAGE ROWS/);
   assert.match(prompt, /the first one/);
-  assert.match(prompt, /1\. \{"row_number":1,"id":1,"name":"IT Equipment"/);
-  assert.match(prompt, /"available_actions":\{"open_detail":true\}/);
-  assert.match(prompt, /2\. \{"row_number":2,"id":2,"name":"Processor"/);
+  assert.match(prompt, /<visible_list route="\/categories"/);
+  assert.match(prompt, /1\. row_number=1, id=1, name=IT Equipment/);
+  assert.match(prompt, /available_actions=\{open_detail=true\}/);
+  assert.match(prompt, /2\. row_number=2, id=2, name=Processor/);
   assert.match(prompt, /route: \/categories; visible rows: 2; filtered total: 9/);
 });
 
@@ -299,7 +300,7 @@ test("page context prompt hides internal form helper actions from the agent", ()
   assert.doesNotMatch(prompt, /validate_active_form/);
 });
 
-test("page context prompt includes current detail readable data before SQL is needed", () => {
+test("page context prompt includes current detail readable data as the primary source", () => {
   const prompt = formatPageContextForPrompt({
     readables: [
       {
@@ -342,7 +343,7 @@ test("page context prompt includes current detail readable data before SQL is ne
   });
 
   assert.match(prompt, /## DETAIL PAGE CONTEXT/);
-  assert.match(prompt, /Use this detail context before SQL/);
+  assert.match(prompt, /Use this detail context as the primary source/);
   assert.match(prompt, /"entity":"inspection"/);
   assert.match(prompt, /"contract_no":"CTR-2026-001"/);
   assert.match(prompt, /"item_description":"core i5"/);

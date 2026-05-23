@@ -3,7 +3,6 @@
 import { parsePartialJson } from "@langchain/core/output_parsers";
 import { v4 as uuidv4 } from "uuid";
 import type { ActionEvent } from "@openuidev/react-lang";
-import { useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useStreamContext } from "@/providers/Stream";
 import { AIMessage, Checkpoint, Message } from "@langchain/langgraph-sdk";
@@ -27,15 +26,10 @@ import {
   OpenUiAssistantMessage,
 } from "../openui-message";
 import {
-  DO_NOT_RENDER_ID_PREFIX,
   ensureToolCallsHaveResponses,
 } from "@/lib/ensure-tool-responses";
 import { copilotBridge } from "@/lib/copilot-bridge";
 import { isAmsRelativeRoute } from "@/lib/ams-route";
-import {
-  buildOpenUiRepairPrompt,
-  openUiDiagnosticKey,
-} from "@/lib/openui-diagnostics";
 import { buildAgentRunConfig } from "@/lib/agent-run-config";
 import { extractModelReasoningTelemetry } from "@/lib/model-reasoning";
 
@@ -45,10 +39,6 @@ const LoadExternalComponent = dynamic(
 );
 
 const NO_PROACTIVE_RESPONSE = "__AMS_NO_PROACTIVE_RESPONSE__";
-const OPENUI_REPAIR_MAX_PER_PAGE = 3;
-const submittedOpenUiRepairMessageIds = new Set<string>();
-const submittedOpenUiRepairKeys = new Set<string>();
-let submittedOpenUiRepairCount = 0;
 
 function CustomComponent({
   message,
@@ -156,7 +146,6 @@ export function AssistantMessage({
   );
   const meta = message ? thread.getMessagesMetadata(message) : undefined;
   const threadInterrupt = thread.interrupt;
-  const openUiRepairInFlightRef = useRef(false);
 
   const parentCheckpoint = meta?.firstSeenState?.parent_checkpoint;
   const anthropicStreamedToolCalls = Array.isArray(content)
@@ -171,73 +160,21 @@ export function AssistantMessage({
     "tool_calls" in message &&
     message.tool_calls &&
     message.tool_calls.length > 0;
+  const isToolResult = message?.type === "tool";
+  const hasAnthropicToolCalls = !!anthropicStreamedToolCalls?.length;
+  const hasInterruptToShow =
+    !!threadInterrupt?.value && (isLastMessage || hasNoAIOrToolMessages);
+  const needsWideMessage =
+    !!openUiCode ||
+    hasInterruptToShow ||
+    !!hasToolCalls ||
+    hasAnthropicToolCalls ||
+    isToolResult;
   const toolCallsHaveContents =
     hasToolCalls &&
     message.tool_calls?.some(
       (tc) => tc.args && Object.keys(tc.args).length > 0,
     );
-  const hasAnthropicToolCalls = !!anthropicStreamedToolCalls?.length;
-  const isToolResult = message?.type === "tool";
-
-  const submitOpenUiRepair = useCallback(
-    async (diagnostics: string) => {
-      if (
-        !message?.id ||
-        !openUiCode ||
-        !isLastMessage ||
-        isLoading ||
-        thread.isLoading ||
-        openUiRepairInFlightRef.current ||
-        submittedOpenUiRepairCount >= OPENUI_REPAIR_MAX_PER_PAGE
-      ) {
-        return;
-      }
-
-      if (submittedOpenUiRepairMessageIds.has(message.id)) return;
-      const key = openUiDiagnosticKey(message.id, diagnostics);
-      if (submittedOpenUiRepairKeys.has(key)) return;
-      submittedOpenUiRepairMessageIds.add(message.id);
-      submittedOpenUiRepairKeys.add(key);
-      submittedOpenUiRepairCount += 1;
-      openUiRepairInFlightRef.current = true;
-
-      const newHumanMessage: Message = {
-        id: `${DO_NOT_RENDER_ID_PREFIX}${uuidv4()}`,
-        type: "human",
-        content: buildOpenUiRepairPrompt({
-          diagnostics,
-          code: openUiCode,
-        }),
-      };
-
-      try {
-        const toolMessages = ensureToolCallsHaveResponses(thread.messages);
-        const pageContext = await copilotBridge.getFreshContext({
-          timeoutMs: 5000,
-          requireFresh: true,
-        });
-        thread.submit(
-          { messages: [...toolMessages, newHumanMessage] },
-          {
-            streamMode: ["values", "custom"],
-            config: buildAgentRunConfig(pageContext),
-            optimisticValues: (prev) => ({
-              ...prev,
-              messages: [
-                ...(prev.messages ?? []),
-                ...toolMessages,
-                newHumanMessage,
-              ],
-            }),
-          },
-        );
-      } finally {
-        openUiRepairInFlightRef.current = false;
-      }
-    },
-    [isLastMessage, isLoading, message?.id, openUiCode, thread],
-  );
-
   const handleOpenUiAction = async (event: ActionEvent) => {
     const action = event as ActionEvent & {
       humanFriendlyMessage?: string;
@@ -360,8 +297,6 @@ export function AssistantMessage({
   const hasVisibleContent = contentString.trim().length > 0 || !!openUiCode;
   const hasOnlyToolCalls =
     !hasVisibleContent && (hasToolCalls || hasAnthropicToolCalls);
-  const hasInterruptToShow =
-    !!threadInterrupt?.value && (isLastMessage || hasNoAIOrToolMessages);
   if (hideToolCalls && hasOnlyToolCalls && !hasInterruptToShow) {
     return null;
   }
@@ -369,8 +304,8 @@ export function AssistantMessage({
   return (
     <div
       className={cn(
-        "flex items-start mr-auto gap-2 group",
-        openUiCode && !isToolResult && "w-full min-w-0",
+        "flex items-start mr-auto gap-2 group max-w-full min-w-0 overflow-hidden",
+        needsWideMessage && "w-full min-w-0 max-w-full",
       )}
     >
       {isToolResult ? (
@@ -378,8 +313,8 @@ export function AssistantMessage({
       ) : (
         <div
           className={cn(
-            "flex flex-col gap-2",
-            openUiCode && "w-full min-w-0",
+            "flex flex-col gap-2 max-w-full",
+            needsWideMessage && "w-full min-w-0",
           )}
         >
           {openUiCode ? (
@@ -392,7 +327,6 @@ export function AssistantMessage({
               }
               isStreaming={isLoading && isLastMessage}
               onAction={handleOpenUiAction}
-              onDiagnostics={submitOpenUiRepair}
             />
           ) : contentString.length > 0 ? (
             <div className="py-1">

@@ -11,8 +11,27 @@ import {
   setFormValuesArgsSchema,
   formatFrontendActionResult,
   hasPendingInterruptResume,
+  requestFormSubmitWithPreflight,
   resolveFrontendActionAccess,
 } from "./frontend-tools.js";
+
+function activeFormPageContext(actions: Array<{ name: string; allowed: boolean }>) {
+  return {
+    actions,
+    readables: [
+      {
+        id: "active-form",
+        value: {
+          route: "/inspections",
+          activeForm: {
+            formId: "inspection_create",
+            title: "New Inspection Certificate",
+          },
+        },
+      },
+    ],
+  };
+}
 
 test("denies frontend actions marked unavailable by current page context", () => {
   const access = resolveFrontendActionAccess(
@@ -356,6 +375,121 @@ test("formats frontend action failures so the model cannot treat them as success
   assert.match(message, /FAILED/i);
   assert.match(message, /Inspection code already exists/);
   assert.match(message, /inspection_code/);
+});
+
+test("request_form_submit validates the active form before asking for approval", () => {
+  const interrupts: unknown[] = [];
+  const result = requestFormSubmitWithPreflight(
+    {
+      configurable: {
+        pageContext: activeFormPageContext([
+          { name: "request_form_submit", allowed: true },
+          { name: "validate_active_form", allowed: true },
+        ]),
+      },
+    },
+    { formId: "inspection_create", intent: "submit" },
+    (value) => {
+      interrupts.push(value);
+      assert.equal((value as any).type, "frontend_action_request");
+      assert.equal((value as any).action.name, "validate_active_form");
+      return {
+        ok: true,
+        action: (value as any).action,
+        result: {
+          ok: false,
+          errors: {
+            department: "Select a department.",
+            contract_no: "Enter a contract number.",
+          },
+        },
+      };
+    },
+  );
+
+  assert.equal(interrupts.length, 1);
+  assert.match(result, /PRE_APPROVAL_VALIDATION_FAILED/);
+  assert.match(result, /department/);
+  assert.match(result, /contract_no/);
+  assert.doesNotMatch(result, /SUCCEEDED/);
+});
+
+test("request_form_submit asks approval only after validation passes", () => {
+  const interruptNames: string[] = [];
+  const result = requestFormSubmitWithPreflight(
+    {
+      configurable: {
+        pageContext: activeFormPageContext([
+          { name: "request_form_submit", allowed: true },
+          { name: "validate_active_form", allowed: true },
+        ]),
+      },
+    },
+    { formId: "inspection_create", intent: "submit" },
+    (value) => {
+      if ((value as any).type === "frontend_action_request") {
+        const name = (value as any).action.name;
+        interruptNames.push(name);
+        return {
+          ok: true,
+          action: (value as any).action,
+          result:
+            name === "validate_active_form"
+              ? { ok: true, errors: {} }
+              : {
+                  ok: true,
+                  message: "Inspection certificate submitted successfully.",
+                  recordId: 45,
+                },
+        };
+      }
+
+      interruptNames.push("approval");
+      assert.equal((value as any).actionRequests[0].name, "request_form_submit");
+      return { decisions: [{ type: "approve" }] };
+    },
+  );
+
+  assert.deepEqual(interruptNames, [
+    "validate_active_form",
+    "approval",
+    "request_form_submit",
+  ]);
+  assert.match(result, /SUCCEEDED/);
+  assert.match(result, /recordId\":45/);
+});
+
+test("request_form_submit stops when preflight approval is rejected", () => {
+  const interruptNames: string[] = [];
+  const result = requestFormSubmitWithPreflight(
+    {
+      configurable: {
+        pageContext: activeFormPageContext([
+          { name: "request_form_submit", allowed: true },
+          { name: "validate_active_form", allowed: true },
+        ]),
+      },
+    },
+    { formId: "inspection_create", intent: "submit" },
+    (value) => {
+      if ((value as any).type === "frontend_action_request") {
+        interruptNames.push((value as any).action.name);
+        return {
+          ok: true,
+          action: (value as any).action,
+          result: { ok: true, errors: {} },
+        };
+      }
+
+      interruptNames.push("approval");
+      return {
+        decisions: [{ type: "reject", message: "User rejected the submit." }],
+      };
+    },
+  );
+
+  assert.deepEqual(interruptNames, ["validate_active_form", "approval"]);
+  assert.match(result, /User rejected the submit/);
 });
 
 test("formats empty option failures with create guidance", () => {

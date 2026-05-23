@@ -379,6 +379,11 @@
   padding: 0.5rem;
 }
 
+.openui-chat-message :is(div, section, article, ul, ol, li, table, thead, tbody, tr, td, th, form, fieldset) {
+  max-width: 100%;
+  min-width: 0;
+}
+
 .openui-chat-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -437,14 +442,15 @@
   box-sizing: border-box;
 }
 
-.openui-chat-message .openui-stack {
+.openui-chat-message :is(.openui-stack, [class*="Stack"], [class*="stack"], [data-slot="stack"]) {
   max-width: 100%;
   min-width: 0;
   gap: 0.5rem;
   flex-wrap: wrap;
+  overflow: hidden;
 }
 
-.openui-chat-message .openui-card {
+.openui-chat-message :is(.openui-card, [class*="Card"], [class*="card"], [data-slot="card"]) {
   max-width: 100%;
   min-width: 0;
   flex: 1 1 0%;
@@ -452,11 +458,14 @@
   overflow: hidden;
 }
 
-.openui-chat-message .openui-stack > .openui-card {
+.openui-chat-message :is(.openui-stack, [class*="Stack"], [class*="stack"], [data-slot="stack"]) > :is(.openui-card, [class*="Card"], [class*="card"], [data-slot="card"]) {
   min-width: min(100%, 220px);
 }
 
-.openui-chat-message :is(.openui-card, [class*="Card"]) {
+.openui-chat-message :is(.openui-card, [class*="Card"], [class*="card"], [data-slot="card"]) {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
   padding: 0.625rem;
 }
 
@@ -480,6 +489,8 @@
 
 .openui-chat-message :is(p, li, td, th, label, span) {
   font-size: 0.875rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .openui-chat-message :is([class*="TextContent"], [class*="text-content"]) {
