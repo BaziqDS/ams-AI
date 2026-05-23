@@ -58,3 +58,9 @@ test("agent tool registry exposes get_app_map directly", () => {
 
   assert.equal(toolNames.includes("get_app_map"), true);
 });
+
+test("agent tool registry exposes search_form_options directly", () => {
+  const toolNames = TOOLS.map((tool): string => tool.name);
+
+  assert.equal(toolNames.includes("search_form_options"), true);
+});

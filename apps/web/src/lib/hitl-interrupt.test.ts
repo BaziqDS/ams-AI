@@ -44,6 +44,19 @@ test("builds approve and reject resume payloads for HITL requests", () => {
   });
 });
 
+test("builds structured auto-rejection resume payloads for moot HITL requests", () => {
+  const resume = buildHitlResume(
+    request,
+    "reject",
+    "user_submitted_manually",
+  );
+
+  assert.equal(resume.decisions[0].type, "reject");
+  assert.match(resume.decisions[0].message ?? "", /already submitted/i);
+  assert.match(resume.decisions[0].message ?? "", /reason=user_submitted_manually/);
+  assert.match(resume.decisions[0].message ?? "", /Do not retry/i);
+});
+
 test("builds production review copy for AMS form submit approval", () => {
   const copy = getHitlActionReviewCopy({
     name: "request_form_submit",

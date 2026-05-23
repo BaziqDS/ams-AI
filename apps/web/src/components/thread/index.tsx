@@ -1,3 +1,5 @@
+"use client";
+
 import { v4 as uuidv4 } from "uuid";
 import { ReactNode, useCallback, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
@@ -17,8 +19,11 @@ import { TooltipIconButton } from "./tooltip-icon-button";
 import {
   ArrowDown,
   LoaderCircle,
+  Mic,
   PanelRightOpen,
   PanelRightClose,
+  Plus,
+  SendHorizontal,
   Sparkles,
   SquarePen,
 } from "lucide-react";
@@ -45,6 +50,7 @@ import {
 import { buildVoiceCommandPrompt } from "@/lib/voice-command";
 import { buildAgentRunConfig } from "@/lib/agent-run-config";
 import { TodosPanel } from "./todos-panel";
+import { getRenderableChatMessages } from "@/lib/chat-message-visibility";
 
 const NO_PROACTIVE_RESPONSE = "__AMS_NO_PROACTIVE_RESPONSE__";
 const RESILIENT_STREAM_OPTIONS = {
@@ -100,15 +106,17 @@ function readPathname(context: PageContext | null): string | null {
 }
 
 function formatRouteLabel(pathname: string | null): string {
-  if (!pathname) return "AMS page selected";
+  if (!pathname) return "AMS";
   const segments = pathname.split("/").filter(Boolean);
-  if (segments.length === 0) return "Overview selected";
+  if (segments.length === 0) return "Overview";
   const [section, id] = segments;
   const name = section
     .split("-")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
-  return id ? `${name} #${id} selected` : `${name} selected`;
+  // Singular for a specific record, plural section name for the list
+  const singular = name.endsWith("s") ? name.slice(0, -1) : name;
+  return id ? `${singular} #${id}` : name;
 }
 
 function deriveContextLabel(context: PageContext | null): string | null {
@@ -116,12 +124,24 @@ function deriveContextLabel(context: PageContext | null): string | null {
   if (!context?.readables.length && !pathname) return null;
 
   const activeForm = context?.readables.find((readable) => {
-    const value = readable.value as { formId?: unknown } | undefined;
-    return typeof value?.formId === "string";
-  })?.value as { formId?: string } | undefined;
+    const value = readable.value as
+      | { formId?: unknown; active?: unknown; activeForm?: { formId?: unknown } }
+      | undefined;
+    return (
+      (typeof value?.formId === "string" && value.active === true) ||
+      typeof value?.activeForm?.formId === "string"
+    );
+  })?.value as
+    | { formId?: string; activeForm?: { formId?: string; title?: string } }
+    | undefined;
 
-  if (activeForm?.formId) {
-    return `${activeForm.formId.replaceAll("_", " ")} active`;
+  const activeFormId = activeForm?.activeForm?.formId ?? activeForm?.formId;
+  const activeFormTitle = activeForm?.activeForm?.title;
+  if (activeFormId) {
+    const name = (activeFormTitle || activeFormId)
+      .replace(/[-_]/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+    return `${name} ? form`;
   }
 
   const currentList = context?.readables.find((readable) => {
@@ -137,12 +157,13 @@ function deriveContextLabel(context: PageContext | null): string | null {
 
   if (currentList?.visible_rows) {
     const visibleCount = currentList.visible_rows.length;
-    const totalText =
+    const total =
       typeof currentList.filtered_total === "number" &&
       currentList.filtered_total !== visibleCount
-        ? ` of ${currentList.filtered_total} total`
-        : "";
-    return `${formatRouteLabel(pathname)} · ${visibleCount} visible${totalText}`;
+        ? currentList.filtered_total
+        : null;
+    const countText = total ? `${visibleCount} of ${total}` : `${visibleCount}`;
+    return `${formatRouteLabel(pathname)} · ${countText} rows`;
   }
 
   return formatRouteLabel(pathname);
@@ -216,12 +237,14 @@ export function Thread() {
 
   const stream = useStreamContext();
   const messages = stream.messages;
+  const renderableMessages = getRenderableChatMessages(messages);
   const isLoading = stream.isLoading;
   const todos = stream.values.todos ?? [];
   const hasActiveTodo = todos.some((todo) => todo.status === "in_progress");
 
   const lastError = useRef<string | undefined>(undefined);
   const pendingVoiceCommandRef = useRef<VoiceCommand | null>(null);
+  const pendingQuickMessageRef = useRef<string | null>(null);
   const handledVoiceCommandIdsRef = useRef(new Set<string>());
 
   useEffect(() => {
@@ -348,7 +371,9 @@ export function Thread() {
   }, [stream]);
 
   const submitVoiceCommand = useCallback(async (command: VoiceCommand) => {
-    await submitUserText(buildVoiceCommandPrompt(command.text), { hidden: true });
+    await submitUserText(buildVoiceCommandPrompt(command.text), {
+      hidden: true,
+    });
   }, [submitUserText]);
 
   useEffect(() => {
@@ -379,12 +404,48 @@ export function Thread() {
   }, [stream.isLoading, submitVoiceCommand]);
 
   useEffect(() => {
+    const onParentMessage = (event: MessageEvent) => {
+      if (event.data?.source !== "ams-copilot") return;
+      if (event.data?.type === "START_NEW_THREAD") {
+        setThreadId(null);
+        return;
+      }
+      if (event.data?.type === "QUICK_MESSAGE") {
+        const text = typeof event.data.text === "string" ? event.data.text.trim() : "";
+        if (!text) return;
+        if (stream.isLoading) {
+          pendingQuickMessageRef.current = text;
+          return;
+        }
+        void submitUserText(text);
+        return;
+      }
+      if (event.data?.type === "SET_HIDE_TOOL_CALLS") {
+        setHideToolCalls(Boolean(event.data.value));
+      }
+    };
+
+    window.addEventListener("message", onParentMessage);
+    return () => {
+      window.removeEventListener("message", onParentMessage);
+    };
+  }, [setThreadId, stream.isLoading, submitUserText]);
+
+  useEffect(() => {
+    if (stream.isLoading || !pendingQuickMessageRef.current) return;
+    const text = pendingQuickMessageRef.current;
+    pendingQuickMessageRef.current = null;
+    void submitUserText(text);
+  }, [stream.isLoading, submitUserText]);
+
+  useEffect(() => {
     notifyParentHitlInterrupt(stream.interrupt?.value);
   }, [stream.interrupt?.value]);
 
   useEffect(() => {
     const onHitlDecision = async (event: Event) => {
-      const { decision } = (event as CustomEvent<HitlDecision>).detail ?? {};
+      const detail = (event as CustomEvent<HitlDecision>).detail ?? {} as HitlDecision;
+      const { decision, reason } = detail;
       if (decision !== "approve" && decision !== "reject") return;
       if (stream.isLoading) return;
       if (!isHitlInterruptSchema(stream.interrupt?.value)) return;
@@ -398,7 +459,7 @@ export function Thread() {
         {
           ...RESILIENT_STREAM_OPTIONS,
           command: {
-            resume: buildHitlResume(stream.interrupt.value, decision),
+            resume: buildHitlResume(stream.interrupt.value, decision, reason),
           },
           config: buildAgentRunConfig(pageContext),
           streamMode: ["values", "custom"],
@@ -419,6 +480,13 @@ export function Thread() {
 
     setInput("");
   };
+
+  const handleVoiceCaptureRequest = useCallback(() => {
+    const requested = copilotBridge.requestVoiceCapture();
+    if (!requested) {
+      toast.info("Voice is available from the AMS page.");
+    }
+  }, []);
 
   const handleRegenerate = async (
     parentCheckpoint: Checkpoint | null | undefined,
@@ -560,38 +628,16 @@ export function Thread() {
             <div className="absolute inset-x-0 top-full h-5 bg-gradient-to-b from-background to-background/0" />
           </div>
         )}
-        {chatStarted && isEmbedded && (
-          <div className="flex items-center justify-between gap-3 p-2 z-10 relative border-b bg-white">
-            <div className="flex items-center gap-2">
-              <AmsAssistantMark size={28} />
-              <span className="text-base font-semibold tracking-tight">
-                AMS Assistant
-              </span>
-            </div>
-            <TooltipIconButton
-              size="lg"
-              className="p-3"
-              tooltip="New thread"
-              variant="ghost"
-              onClick={() => setThreadId(null)}
-            >
-              <SquarePen className="size-5" />
-            </TooltipIconButton>
-          </div>
-        )}
-
         <StickToBottom className="relative flex-1 overflow-hidden">
           <StickyToBottomContent
             className={cn(
-              "absolute px-4 inset-0 overflow-y-scroll [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-track]:bg-transparent",
-              !chatStarted && "flex flex-col items-stretch mt-[25vh]",
-              chatStarted && "grid grid-rows-[1fr_auto]",
+              "absolute pl-4 pr-[18px] top-0 left-0 right-0 bottom-[64px] overflow-y-auto [&::-webkit-scrollbar]:w-[5px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-track]:my-3",
+              "grid grid-rows-[1fr_auto]",
             )}
             contentClassName="pt-8 pb-16  max-w-3xl mx-auto flex flex-col gap-4 w-full"
             content={
               <>
-                {messages
-                  .filter((m) => !m.id?.startsWith(DO_NOT_RENDER_ID_PREFIX))
+                {renderableMessages
                   .map((message, index) =>
                     message.type === "human" ? (
                       <HumanMessage
@@ -624,7 +670,7 @@ export function Thread() {
               </>
             }
             footer={
-              <div className="sticky flex flex-col items-center gap-4 bottom-0 bg-white">
+              <div className="sticky flex flex-col items-center gap-4 bottom-0 bg-white px-0 pr-[2px] pb-5">
                 {!chatStarted && !isEmbedded && (
                   <div className="flex gap-3 items-center">
                     <AmsAssistantMark size={32} />
@@ -636,22 +682,23 @@ export function Thread() {
 
                 <ScrollToBottom className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 animate-in fade-in-0 zoom-in-95" />
 
-                <div className="bg-muted rounded-2xl border shadow-xs mx-auto mb-8 w-full max-w-3xl relative z-10">
-                  <TodosPanel
-                    todos={todos}
-                    expanded={showTodos}
-                    onExpandedChange={setShowTodos}
-                    attached
-                  />
+                <div className="w-full max-w-3xl mx-auto relative z-10">
                   {contextLabel ? (
                     <div className="ams-context-chip" aria-label="Current AI context">
                       <span className="ams-context-chip-dot" aria-hidden="true" />
                       <span className="ams-context-chip-text">{contextLabel}</span>
                     </div>
                   ) : null}
+                <div className={`ams-chat-input-box bg-background border w-full ${contextLabel ? "rounded-tr-[18px] rounded-b-[18px] rounded-tl-none" : "rounded-[18px]"}`}>
+                  <TodosPanel
+                    todos={todos}
+                    expanded={showTodos}
+                    onExpandedChange={setShowTodos}
+                    attached
+                  />
                   <form
                     onSubmit={handleSubmit}
-                    className="grid grid-rows-[1fr_auto] gap-2 max-w-3xl mx-auto"
+                    className="grid grid-rows-[1fr_auto] gap-1 max-w-3xl mx-auto"
                   >
                     <textarea
                       value={input}
@@ -670,12 +717,23 @@ export function Thread() {
                         }
                       }}
                       placeholder="Type your message..."
-                      className="p-3.5 pb-0 border-none bg-transparent field-sizing-content shadow-none ring-0 outline-none focus:outline-none focus:ring-0 resize-none"
+                      className="px-3 pt-3 pb-0 min-h-[52px] border-none bg-transparent field-sizing-content shadow-none ring-0 outline-none focus:outline-none focus:ring-0 resize-none overflow-y-auto break-words text-sm"
                     />
 
-                    <div className="flex items-center justify-between p-2 pt-4">
-                      <div>
-                        <div className="flex items-center space-x-2">
+                    <div className="flex items-center justify-between px-2.5 py-2 pt-1">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="size-8 rounded-full text-muted-foreground hover:bg-white/70"
+                          aria-label="New chat"
+                          title="New chat"
+                          onClick={() => setThreadId(null)}
+                        >
+                          <Plus className="size-4" />
+                        </Button>
+                        <div className="flex origin-left scale-[0.88] items-center space-x-1.5">
                           <Switch
                             id="render-tool-calls"
                             checked={hideToolCalls ?? false}
@@ -683,28 +741,53 @@ export function Thread() {
                           />
                           <Label
                             htmlFor="render-tool-calls"
-                            className="text-sm text-gray-600"
+                            className="text-xs text-gray-600"
                           >
                             Hide Tool Calls
                           </Label>
                         </div>
                       </div>
                       {stream.isLoading ? (
-                        <Button key="stop" onClick={() => stream.stop()}>
-                          <LoaderCircle className="w-4 h-4 animate-spin" />
+                        <Button
+                          key="stop"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => stream.stop()}
+                          className="h-7 rounded-full text-xs px-3 gap-1.5 text-muted-foreground hover:text-foreground"
+                        >
+                          <LoaderCircle className="w-3 h-3 animate-spin" />
                           Cancel
                         </Button>
                       ) : (
-                        <Button
-                          type="submit"
-                          className="transition-all shadow-md"
-                          disabled={isLoading || !input.trim()}
-                        >
-                          Send
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          {/* mic — matches detached: transparent bg, muted icon, 28 px, 8 px radius */}
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="size-7 rounded-[8px] border-0 bg-transparent text-muted-foreground hover:bg-black/5 hover:text-foreground"
+                            onClick={handleVoiceCaptureRequest}
+                            aria-label="Start voice input"
+                            title="Start voice input"
+                          >
+                            <Mic className="size-3.5" strokeWidth={1.9} />
+                          </Button>
+                          {/* send — circle, black */}
+                          <Button
+                            type="submit"
+                            size="icon"
+                            className="size-[30px] rounded-full border-0 bg-gray-900 text-white shadow-[0_2px_8px_-2px_rgba(0,0,0,0.35)] transition-all duration-150 hover:bg-black hover:shadow-[0_4px_14px_-2px_rgba(0,0,0,0.4)] active:scale-95 disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none disabled:cursor-not-allowed"
+                            disabled={isLoading || !input.trim()}
+                            aria-label="Send message"
+                            title="Send message"
+                          >
+                            <SendHorizontal className="size-3.5" strokeWidth={2} />
+                          </Button>
+                        </div>
                       )}
                     </div>
                   </form>
+                </div>
                 </div>
               </div>
             }

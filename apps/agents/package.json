@@ -5,6 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node scripts/free-dev-port.mjs 2024",
     "dev": "langgraphjs dev --port 2024 --config ../../langgraph.json",
     "build": "turbo build:internal --filter=agents",
     "build:internal": "npm run clean && tsc",

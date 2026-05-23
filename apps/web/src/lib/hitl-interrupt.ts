@@ -1,5 +1,23 @@
 export type HitlDecision = { type: "approve" } | { type: "reject"; message?: string };
 
+export type HitlRejectionReason =
+  | "user_submitted_manually"
+  | "user_closed_form"
+  | "user_navigated_away";
+
+const HITL_REJECTION_REASON_MESSAGES: Record<HitlRejectionReason, string> = {
+  user_submitted_manually:
+    "The user already submitted this form manually before approving. Do not retry the submit — that would create a duplicate record. Read the activity context for the saved recordId and continue with the post-write follow-up (next stage button, open the record).",
+  user_closed_form:
+    "The user closed the form before approving. Do not retry the submit and do not reopen the form on your own. Acknowledge that the form is closed and ask the user what they want next.",
+  user_navigated_away:
+    "The user navigated to a different page before approving. The form context is now stale. Do not retry the submit. Work from the new route in the refreshed live page state.",
+};
+
+export function getHitlRejectionMessage(reason: HitlRejectionReason): string {
+  return HITL_REJECTION_REASON_MESSAGES[reason];
+}
+
 export type HitlActionRequest = {
   name: string;
   args: Record<string, unknown>;
@@ -64,16 +82,16 @@ export function isHitlInterruptSchema(value: unknown): value is HitlRequest {
 export function buildHitlResume(
   request: HitlRequest,
   type: "approve" | "reject",
+  reason?: HitlRejectionReason,
 ): { decisions: HitlDecision[] } {
   return {
-    decisions: request.actionRequests.map((action) =>
-      type === "approve"
-        ? { type: "approve" }
-        : {
-            type: "reject",
-            message: `User rejected ${action.name}. Do not submit the form.`,
-          },
-    ),
+    decisions: request.actionRequests.map((action) => {
+      if (type === "approve") return { type: "approve" };
+      const message = reason
+        ? `${getHitlRejectionMessage(reason)} (auto-rejected ${action.name} with reason=${reason})`
+        : `User rejected ${action.name}. Do not submit the form.`;
+      return { type: "reject", message };
+    }),
   };
 }
 

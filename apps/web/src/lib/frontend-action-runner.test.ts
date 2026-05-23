@@ -107,6 +107,60 @@ test("frontend action runner resumes with the fresh context provided after the f
   );
 });
 
+test("frontend action runner annotates submit results with current page state", async () => {
+  const submitCalls: unknown[] = [];
+  const pageContext = {
+    readables: [
+      {
+        id: "__ams_runtime_context",
+        value: { route: { pathname: "/inspections/43" } },
+      },
+      {
+        id: "inspection-create-form",
+        value: { route: "/inspections/43", activeForm: null },
+      },
+    ],
+    actions: [],
+  };
+
+  const interrupt: FrontendActionInterrupt = {
+    type: "frontend_action_request",
+    action: {
+      name: "request_form_submit",
+      args: { formId: "inspection_create", intent: "submit" },
+    },
+  };
+
+  await runFrontendActionInterrupt(interrupt, {
+    callAction: async () => ({
+      ok: true,
+      message: "Inspection certificate submitted successfully.",
+      recordId: 43,
+      redirectTo: "/inspections/43",
+    }),
+    getFreshContext: async () => pageContext,
+    submit: (...args: unknown[]) => {
+      submitCalls.push(args);
+    },
+  });
+
+  const resume = (submitCalls[0] as Array<{
+    command?: { resume?: { result?: Record<string, unknown> } };
+  }>)[1].command?.resume;
+
+  assert.deepEqual(resume?.result, {
+    ok: true,
+    message: "Inspection certificate submitted successfully.",
+    recordId: 43,
+    redirectTo: "/inspections/43",
+    currentRoute: "/inspections/43",
+    activeFormId: null,
+    formClosed: true,
+    submittedFormId: "inspection_create",
+    routeMatchesRedirect: true,
+  });
+});
+
 test("frontend action runner passes context-not-ready action results back to the agent", async () => {
   const submitCalls: unknown[] = [];
   const pageContext = { readables: [], actions: [] };

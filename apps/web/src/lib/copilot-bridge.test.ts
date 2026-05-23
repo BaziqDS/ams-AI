@@ -107,3 +107,29 @@ test("getFreshContext can reject instead of silently returning stale context", a
     /Fresh AMS page context/,
   );
 });
+
+test("requestVoiceCapture asks the parent AMS shell to start voice mode", () => {
+  const postedMessages: unknown[] = [];
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {
+      parent: {
+        postMessage(message: unknown) {
+          postedMessages.push(message);
+        },
+      },
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent() {
+        return true;
+      },
+    },
+  });
+
+  const bridge = new CopilotBridge();
+
+  assert.equal(bridge.requestVoiceCapture(), true);
+  assert.deepEqual(postedMessages, [
+    { source: "ams-copilot-iframe", type: "START_VOICE_CAPTURE" },
+  ]);
+});

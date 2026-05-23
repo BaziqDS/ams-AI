@@ -1,13 +1,15 @@
+"use client";
+
 import { parsePartialJson } from "@langchain/core/output_parsers";
 import { v4 as uuidv4 } from "uuid";
 import type { ActionEvent } from "@openuidev/react-lang";
 import { useCallback, useRef } from "react";
+import dynamic from "next/dynamic";
 import { useStreamContext } from "@/providers/Stream";
 import { AIMessage, Checkpoint, Message } from "@langchain/langgraph-sdk";
 import { getContentString } from "../utils";
 import { BranchSwitcher, CommandBar } from "./shared";
 import { MarkdownText } from "../markdown-text";
-import { LoadExternalComponent } from "@langchain/langgraph-sdk/react-ui";
 import { cn } from "@/lib/utils";
 import { ToolCalls, ToolResult } from "./tool-calls";
 import { MessageContentComplex } from "@langchain/core/messages";
@@ -36,6 +38,11 @@ import {
 } from "@/lib/openui-diagnostics";
 import { buildAgentRunConfig } from "@/lib/agent-run-config";
 import { extractModelReasoningTelemetry } from "@/lib/model-reasoning";
+
+const LoadExternalComponent = dynamic(
+  () => import("../external-ui-component"),
+  { ssr: false },
+);
 
 const NO_PROACTIVE_RESPONSE = "__AMS_NO_PROACTIVE_RESPONSE__";
 const OPENUI_REPAIR_MAX_PER_PAGE = 3;
@@ -346,6 +353,16 @@ export function AssistantMessage({
   }
 
   if (isToolResult && hideToolCalls) {
+    return null;
+  }
+
+  // AI message with only tool calls and no text — nothing to show when tool calls are hidden
+  const hasVisibleContent = contentString.trim().length > 0 || !!openUiCode;
+  const hasOnlyToolCalls =
+    !hasVisibleContent && (hasToolCalls || hasAnthropicToolCalls);
+  const hasInterruptToShow =
+    !!threadInterrupt?.value && (isLastMessage || hasNoAIOrToolMessages);
+  if (hideToolCalls && hasOnlyToolCalls && !hasInterruptToShow) {
     return null;
   }
 

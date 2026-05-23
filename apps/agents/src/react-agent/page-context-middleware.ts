@@ -1,28 +1,26 @@
 import { dynamicSystemPromptMiddleware } from "langchain";
+import { getFormWorkflowGuidance } from "./form-workflows.js";
+import {
+  isObject,
+  RUNTIME_READABLE_ID,
+  ACTIVITY_READABLE_ID,
+  PERMISSION_READABLE_ID,
+  AGENT_HIDDEN_FRONTEND_ACTIONS,
+  type PageContext,
+  type PageContextAction,
+} from "./page-context-utils.js";
 
 type Readable = { id: string; description: string; value: unknown };
-type ActionDef = {
+type ActionDef = PageContextAction & {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
-  allowed?: boolean;
-  blockedReason?: string;
-  requiredPermissions?: string[];
-  requiredCapabilities?: Array<{ module: string; level?: string }>;
 };
-type PageContext = { readables?: Readable[]; actions?: ActionDef[] };
 
-const RUNTIME_READABLE_ID = "__ams_runtime_context";
-const ACTIVITY_READABLE_ID = "__ams_activity_context";
-const PERMISSION_READABLE_ID = "__ams_permission_context";
 const SYSTEM_READABLE_IDS = new Set([
   RUNTIME_READABLE_ID,
   ACTIVITY_READABLE_ID,
   PERMISSION_READABLE_ID,
-]);
-const AGENT_HIDDEN_FRONTEND_ACTIONS = new Set([
-  "focus_form_field",
-  "validate_active_form",
 ]);
 
 type CompactOptions = {
@@ -31,12 +29,15 @@ type CompactOptions = {
   maxDepth?: number;
 };
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function isSystemReadable(readable: Readable): boolean {
   return SYSTEM_READABLE_IDS.has(readable.id);
+}
+
+function hasPendingDependencies(field: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(field.missingDependencies) &&
+    field.missingDependencies.length > 0
+  );
 }
 
 function compactForPrompt(
@@ -339,29 +340,91 @@ function formatFieldOption(option: unknown): string {
   return `${String(label)}=${String(value)}`;
 }
 
+function appendOptionFieldMetadata(parts: string[], field: Record<string, unknown>) {
+  if (typeof field.optionsState === "string") {
+    parts.push(`optionsState=${field.optionsState}`);
+  }
+  if (typeof field.optionSource === "string") {
+    parts.push(`optionSource=${field.optionSource}`);
+  }
+  if (typeof field.resolver === "string") {
+    parts.push(`resolver=${field.resolver}`);
+  }
+  if (Array.isArray(field.dependsOn) && field.dependsOn.length > 0) {
+    parts.push(`dependsOn=[${field.dependsOn.map(String).join(", ")}]`);
+  }
+  if (Array.isArray(field.affects) && field.affects.length > 0) {
+    parts.push(`affects=[${field.affects.map(String).join(", ")}]`);
+  }
+  if (Array.isArray(field.missingDependencies) && field.missingDependencies.length > 0) {
+    parts.push(`missingDependencies=[${field.missingDependencies.map(String).join(", ")}]`);
+  }
+  if (typeof field.totalCount === "number") {
+    parts.push(`totalCount=${field.totalCount}`);
+  }
+  if (typeof field.hasMore === "boolean") {
+    parts.push(`hasMore=${field.hasMore}`);
+  }
+
+  if (Array.isArray(field.options)) {
+    const options = field.options.slice(0, 8).map(formatFieldOption);
+    parts.push(`options=[${options.join(", ")}${field.options.length > 8 ? ", ..." : ""}]`);
+  }
+  if (Array.isArray(field.optionsPreview)) {
+    const options = field.optionsPreview.slice(0, 8).map(formatFieldOption);
+    parts.push(`optionsPreview=[${options.join(", ")}${field.optionsPreview.length > 8 ? ", ..." : ""}]`);
+  }
+}
+
+function formatArrayItemField(itemField: unknown): string | null {
+  if (!isObject(itemField) || typeof itemField.name !== "string") return null;
+  if (hasPendingDependencies(itemField)) return null;
+  const parts = [itemField.name];
+  if (typeof itemField.type === "string") parts.push(`type=${itemField.type}`);
+  if (typeof itemField.label === "string") parts.push(`label="${itemField.label}"`);
+  if (itemField.required === true) parts.push("required=true");
+  if (itemField.readOnly === true) parts.push("readOnly=true");
+  appendOptionFieldMetadata(parts, itemField);
+  return `${itemField.name}(${parts.slice(1).join(", ")})`;
+}
+
+function formatDeferredArrayItemFields(fields: unknown[]): string | null {
+  const deferred: string[] = [];
+  for (const f of fields) {
+    if (!isObject(f) || typeof f.name !== "string") continue;
+    if (!hasPendingDependencies(f)) continue;
+    const deps = (f.missingDependencies as unknown[]).map(String).join(", ");
+    deferred.push(`${f.name} (needs ${deps})`);
+  }
+  if (deferred.length === 0) return null;
+  return `deferredFields=[${deferred.join(", ")}]`;
+}
+
 function formatField(field: unknown): string | null {
   if (!isObject(field)) return null;
   const name = typeof field.name === "string" ? field.name : null;
   if (!name) return null;
+  if (hasPendingDependencies(field)) return null;
 
   const parts = [name];
   if (typeof field.type === "string") parts.push(`type=${field.type}`);
   if (typeof field.label === "string") parts.push(`label="${field.label}"`);
   if (field.required === true) parts.push("required=true");
   if (field.readOnly === true) parts.push("readOnly=true");
-
-  if (Array.isArray(field.options)) {
-    const options = field.options.slice(0, 8).map(formatFieldOption);
-    parts.push(`options=[${options.join(", ")}${field.options.length > 8 ? ", ..." : ""}]`);
-  }
+  appendOptionFieldMetadata(parts, field);
 
   if (Array.isArray(field.arrayItemFields) && field.arrayItemFields.length > 0) {
+    const visibleCount = field.arrayItemFields.length;
     const itemFields = field.arrayItemFields
-      .map((itemField) => (isObject(itemField) && typeof itemField.name === "string" ? itemField.name : null))
+      .map(formatArrayItemField)
       .filter((itemField): itemField is string => Boolean(itemField))
       .slice(0, 24);
     if (itemFields.length > 0) {
-      parts.push(`arrayItemFields=[${itemFields.join(", ")}${field.arrayItemFields.length > 24 ? ", ..." : ""}]`);
+      parts.push(`arrayItemFields=[${itemFields.join(", ")}${visibleCount > 24 ? ", ..." : ""}]`);
+    }
+    const deferred = formatDeferredArrayItemFields(field.arrayItemFields);
+    if (deferred) {
+      parts.push(deferred);
     }
   }
 
@@ -387,6 +450,18 @@ function formatRuntime(runtime: unknown): string[] {
   return lines;
 }
 
+function formatDeferredFieldsSummary(fields: unknown[]): string | null {
+  const deferred: string[] = [];
+  for (const f of fields) {
+    if (!isObject(f) || typeof f.name !== "string") continue;
+    if (!hasPendingDependencies(f)) continue;
+    const deps = (f.missingDependencies as unknown[]).map(String).join(", ");
+    deferred.push(`${f.name} (needs ${deps})`);
+  }
+  if (deferred.length === 0) return null;
+  return `Deferred fields (hidden — fill their dependencies first, they appear on the next turn): ${deferred.join("; ")}`;
+}
+
 function formatActiveForm(formReadables: unknown[]): string[] {
   const lines: string[] = [];
 
@@ -399,12 +474,15 @@ function formatActiveForm(formReadables: unknown[]): string[] {
     lines.push(`## ACTIVE FORM: ${String(activeForm.title ?? activeForm.formId)}`);
     lines.push(`- formId: ${String(activeForm.formId)}`);
     if (activeForm.mode) lines.push(`- mode: ${String(activeForm.mode)}`);
-    lines.push(
-      '- set_form_values call shape: {"formId":"' +
-        String(activeForm.formId) +
-        '","values":{"fieldName":value},"reason":"short reason"}. The "values" argument is always a JSON object, never an array. For repeatable rows, use {"values":{"items":[{"field":value}]}} or exact dotted names such as {"values":{"items.0.central_register":1}}.',
-    );
 
+    const workflowGuidance = typeof activeForm.formId === "string"
+      ? getFormWorkflowGuidance(activeForm.formId)
+      : null;
+    if (workflowGuidance) {
+      lines.push("");
+      lines.push(workflowGuidance);
+      lines.push("");
+    }
     if (Array.isArray(activeForm.fields) && activeForm.fields.length > 0) {
       lines.push("- Writable field schema (ONLY these exact names are fillable with set_form_values):");
       activeForm.fields
@@ -414,6 +492,10 @@ function formatActiveForm(formReadables: unknown[]): string[] {
         .forEach((field) => lines.push(`    • ${field}`));
       if (activeForm.fields.length > 40) {
         lines.push(`    • ... ${activeForm.fields.length - 40} more writable fields not shown`);
+      }
+      const deferredSummary = formatDeferredFieldsSummary(activeForm.fields as unknown[]);
+      if (deferredSummary) {
+        lines.push(`- ${deferredSummary}`);
       }
     } else {
       lines.push("- Writable field schema: none currently exposed.");
@@ -489,9 +571,32 @@ function formatActivity(activity: unknown): string[] {
   if (lastSubmit) {
     const ok = lastSubmit.ok;
     const msg = typeof lastSubmit.message === "string" ? lastSubmit.message : "";
+    const result = isObject(lastSubmit.result) ? lastSubmit.result : null;
+    const recordId =
+      typeof result?.recordId === "string" || typeof result?.recordId === "number"
+        ? String(result.recordId)
+        : undefined;
+    const redirectTo =
+      typeof result?.redirectTo === "string" && result.redirectTo
+        ? result.redirectTo
+        : undefined;
+    const continuation = [
+      recordId ? `recordId=${recordId}` : undefined,
+      redirectTo ? `redirectTo=${redirectTo}` : undefined,
+    ].filter(Boolean);
     lines.push(
       `- Last submit: ${ok === true ? "✅ OK" : ok === false ? "❌ FAILED" : "unverified"} on form ${String(lastSubmit.formTitle ?? lastSubmit.formId ?? "?")}${msg ? ` — ${msg}` : ""}`,
     );
+    if (continuation.length > 0) {
+      lines.push(`- Last submit result details: ${continuation.join(", ")}`);
+    }
+  }
+
+  const lastClosed = isObject(activity.lastClosedForm) ? activity.lastClosedForm : null;
+  if (lastClosed) {
+    const label = String(lastClosed.title ?? lastClosed.formId ?? "unknown form");
+    const route = typeof lastClosed.route === "string" ? lastClosed.route : "";
+    lines.push(`- Last closed form: ${label}${route ? ` on ${route}` : ""}`);
   }
 
   const recent = Array.isArray(activity.recentActivity) ? activity.recentActivity : [];
@@ -559,8 +664,29 @@ function formatPermissions(perms: unknown, actions: ActionDef[]): string[] {
 
 export function formatPageContextForPrompt(ctx: PageContext | undefined): string {
   if (!ctx) return "";
-  const readables = Array.isArray(ctx.readables) ? ctx.readables : [];
-  const actions = Array.isArray(ctx.actions) ? ctx.actions : [];
+
+  // PageContext arrives from the host app with all fields optional. Normalize
+  // it once here into the strict Readable/ActionDef shapes the formatters use.
+  const readables: Readable[] = (
+    Array.isArray(ctx.readables) ? ctx.readables : []
+  ).map((readable) => ({
+    id: typeof readable.id === "string" ? readable.id : "",
+    description:
+      typeof readable.description === "string" ? readable.description : "",
+    value: readable.value,
+  }));
+  const actions: ActionDef[] = (
+    Array.isArray(ctx.actions) ? ctx.actions : []
+  ).map((action) => ({
+    ...action,
+    name: typeof action.name === "string" ? action.name : "",
+    description:
+      typeof action.description === "string" ? action.description : "",
+    parameters:
+      action.parameters && typeof action.parameters === "object"
+        ? action.parameters
+        : {},
+  }));
 
   if (readables.length === 0 && actions.length === 0) {
     return "\n\nCurrent page context: no page state shared by the host app.";

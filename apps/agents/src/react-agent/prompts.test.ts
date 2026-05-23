@@ -17,6 +17,32 @@ test("prompt requires route-aware navigation suggestions before form work", () =
   assert.match(SYSTEM_PROMPT_TEMPLATE, /@OpenUrl\("\/inspections"\)/);
 });
 
+test("prompt reuses the active form and current list page context", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /LIVE PAGE STATE contains an activeForm/i);
+  assert.match(
+    SYSTEM_PROMPT_TEMPLATE,
+    /Do not call open_form, open_create_\*_form, or navigate_to_route for the same task\/form/i
+  );
+  assert.match(
+    SYSTEM_PROMPT_TEMPLATE,
+    /current route already matches the user's target page\/module/i
+  );
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /Treat duplicate navigation to the same route as a mistake/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /filters, pagination, filtered_total, and visible_rows/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /Do not reapply the same filters/i);
+});
+
+test("prompt routes current list search filters pagination and row opens through frontend actions", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /LIST CONTROL ACTIONS/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /set_list_filters/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /clear_list_filters/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /go_to_list_page/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /open_visible_row/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /available_filters/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /refreshed LIVE PAGE STATE/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /Do not use SQL or DOM\/browser guessing/i);
+});
+
 test("prompt forbids claiming submit success without verified frontend result", () => {
   assert.match(
     SYSTEM_PROMPT_TEMPLATE,
@@ -37,6 +63,24 @@ test("prompt tells the agent to use compact AMS activity memory", () => {
     SYSTEM_PROMPT_TEMPLATE,
     /Do not claim events that are not present/i
   );
+});
+
+test("prompt treats manual form submits as completed workflow state", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /manual or user-initiated submit/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /lastSubmitResult.*ok=true/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /for any AMS module/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /Do not call request_form_submit for that already-submitted form/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /redirectTo/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /module route rules/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /recordId/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /Last closed form/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /before calling request_form_submit/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /inspection_create.*recordId/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /navigate_to_route.*\/inspections\/\{recordId\}/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /reason=user_submitted_manually/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /reason=user_closed_form/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /reason=user_navigated_away/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /Do not retry request_form_submit/i);
 });
 
 test("prompt does not advertise Tavily or web search tools", () => {
@@ -76,9 +120,6 @@ test("prompt only names registered frontend form tools", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /set_form_values/);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /Writable field schema/);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /read-only context/);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /one valid JSON object/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /NEVER pass an array directly as values/);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /"values":\{"items":\[/);
   assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /set_fields/);
   assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /set_inspection_items/);
 });
@@ -90,17 +131,48 @@ test("prompt discourages SQL discovery during active form filling", () => {
   );
   assert.match(
     SYSTEM_PROMPT_TEMPLATE,
-    /For inspection item rows, put row data under the "items" array/i
+    /do not pre-resolve dropdown or foreign-key IDs with SQL before opening the relevant form/i
   );
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /items\.0\.central_register/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /do not invent/i);
+  assert.match(
+    SYSTEM_PROMPT_TEMPLATE,
+    /First open the form through the registered frontend action/i
+  );
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /department=CSIT/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /search_form_options/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /resolve IDs from the active form/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /never send display text as a select value/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /put row data under the "items" key/i);
 });
 
-test("prompt requires complete required field groups on inspection stages", () => {
+test("prompt treats user-named option values as hard requirements", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /EXPLICIT OPTION INTENT/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /hard requirement/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /approximate text/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /search_form_options before patching/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /prefilled/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /auto-selected/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /tell the user/i);
+});
+
+test("prompt requires semantic category judgment when creating items", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /ITEM CATEGORY JUDGMENT/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /subcategory/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /category_path/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /Stationary/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /create a new category or subcategory/i);
+});
+
+test("prompt requires Central Register item linking before item creation", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /CENTRAL REGISTER ITEM LINKING/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /description\/specifications/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /redundant catalog item/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /ask the user/i);
+});
+
+test("prompt requires complete required field groups on form rows", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /required=true/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /fill all required sibling fields/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /central_register_page_no/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /stock_register_page_no/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /WORKFLOW guidance/i);
 });
 
 test("prompt stops repeated form retry loops before hitting graph recursion limits", () => {
@@ -166,6 +238,11 @@ test("prompt tells the agent when to use richer OpenUI components", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /Use charts only when/i);
 });
 
+test("prompt forbids hallucinated OpenUI chart and TextContent arguments", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /There is no generic Chart component/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /TextContent accepts exactly 1 or 2 arguments/i);
+});
+
 test("prompt forbids invalid inline OpenUI variable assignments", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /never assign variables inside arrays/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /include every defined variable/i);
@@ -178,15 +255,24 @@ test("prompt supports OpenUI renderer repair without exposing renderer-only tool
   assert.match(SYSTEM_PROMPT_TEMPLATE, /@ToAssistant/);
 });
 
+test("prompt uses the documented OpenUI prompt options without extra binding syntax", () => {
+  assert.match(
+    SYSTEM_PROMPT_TEMPLATE,
+    /ENTIRE response must be valid openui-lang code/i
+  );
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /root` is the entry point/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /Arguments are POSITIONAL/i);
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /Declare mutable state with `\$varName/i);
+  assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /String concatenation: `"text" \+ \$var/i);
+});
+
 test("prompt continues after navigation or form-open actions with refreshed page context", () => {
   assert.match(
     SYSTEM_PROMPT_TEMPLATE,
     /After a frontend action navigates, opens a form, or changes which form is active/i
   );
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /refreshed LIVE PAGE STATE/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /only current page\/form context/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /continue from the refreshed LIVE PAGE STATE/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /fill it immediately with set_form_values/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /system resumes the next model step with refreshed LIVE PAGE STATE/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /refreshed state as the only current page\/form context/i);
   assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /wait for fresh page context/i);
   assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /ask the user to say "continue"/i);
 });
@@ -221,11 +307,8 @@ test("module manifest section does not hardcode page data or workflow details", 
   assert.doesNotMatch(manifestSection, /finance_check_date/i);
 });
 
-test("durable prompt keeps only stable category vocabulary outside live page state", () => {
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /FIXED_ASSET/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /CONSUMABLE/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /PERISHABLE/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /INDIVIDUAL/i);
-  assert.match(SYSTEM_PROMPT_TEMPLATE, /QUANTITY/i);
+test("durable prompt references detail page context as primary source", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /DETAIL PAGE CONTEXT/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /current record/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /before SQL/i);
 });

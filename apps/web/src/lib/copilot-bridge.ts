@@ -32,14 +32,26 @@ type VoiceCommandMessage = {
   command?: VoiceCommand;
 };
 
+/**
+ * Structured reason a "reject" decision can carry when the user made the
+ * pending approval moot (without clicking the card). Lets the agent
+ * distinguish "user said no" from "user already acted".
+ */
+export type HitlRejectionReason =
+  | "user_submitted_manually"
+  | "user_closed_form"
+  | "user_navigated_away";
+
 export type HitlDecision = {
   decision: "approve" | "reject";
+  reason?: HitlRejectionReason;
 };
 
 type HitlDecisionMessage = {
   source: "ams-copilot";
   type: "HITL_DECISION";
   decision?: HitlDecision["decision"];
+  reason?: HitlRejectionReason;
 };
 
 type ActionResultMessage = {
@@ -131,10 +143,23 @@ export class CopilotBridge {
 
     if (data.type === "HITL_DECISION") {
       if (data.decision !== "approve" && data.decision !== "reject") return;
+      const validReasons: HitlRejectionReason[] = [
+        "user_submitted_manually",
+        "user_closed_form",
+        "user_navigated_away",
+      ];
+      const reason =
+        data.decision === "reject" &&
+        typeof data.reason === "string" &&
+        (validReasons as string[]).includes(data.reason)
+          ? (data.reason as HitlRejectionReason)
+          : undefined;
       if (typeof window !== "undefined") {
         window.dispatchEvent(
           new CustomEvent<HitlDecision>(COPILOT_HITL_DECISION_EVENT, {
-            detail: { decision: data.decision },
+            detail: reason
+              ? { decision: data.decision, reason }
+              : { decision: data.decision },
           }),
         );
       }
@@ -226,6 +251,15 @@ export class CopilotBridge {
 
   hasParent(): boolean {
     return typeof window !== "undefined" && window.parent !== window;
+  }
+
+  requestVoiceCapture(): boolean {
+    if (!this.hasParent()) return false;
+    window.parent.postMessage(
+      { source: "ams-copilot-iframe", type: "START_VOICE_CAPTURE" },
+      TRUSTED_PARENT_ORIGIN ?? "*",
+    );
+    return true;
   }
 
   callAction(name: string, args: unknown): Promise<unknown> {

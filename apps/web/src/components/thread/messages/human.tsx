@@ -92,7 +92,7 @@ export function HumanMessage({
             onSubmit={handleSubmitEdit}
           />
         ) : (
-          <p className="px-4 py-2 rounded-3xl bg-muted w-fit ml-auto whitespace-pre-wrap">
+          <p className="px-4 py-2 rounded-3xl bg-muted w-fit max-w-[min(92vw,42rem)] ml-auto whitespace-pre-wrap break-words overflow-visible">
             {contentString}
           </p>
         )}

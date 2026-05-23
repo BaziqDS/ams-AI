@@ -133,32 +133,52 @@
   }
 }
 
+/* Polished chat input box — defined border + depth */
+.ams-chat-input-box {
+  border-color: oklch(0.86 0 0); /* slightly darker than default 0.922 */
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.04),          /* outer ring for crispness */
+    0 4px 20px -4px rgba(0, 0, 0, 0.09),    /* soft drop shadow */
+    inset 0 1px 0 rgba(255, 255, 255, 0.9); /* top inner highlight — gives depth */
+}
+
+@keyframes ams-chip-pulse {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(0.85); }
+}
+
 .ams-context-chip {
   width: fit-content;
-  max-width: calc(100% - 24px);
-  min-height: 26px;
+  max-width: calc(100% - 8px);
+  min-height: 30px;
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  margin: 10px 10px 0;
-  padding: 4px 10px 4px 8px;
-  border: 1px solid color-mix(in oklch, var(--border) 88%, var(--foreground) 8%);
-  border-radius: 999px;
-  color: color-mix(in oklch, var(--foreground) 82%, var(--muted-foreground));
-  background: color-mix(in oklch, var(--background) 92%, white);
-  font-size: 12px;
-  font-weight: 500;
+  margin: 0 0 -1px 0; /* flush with box left edge; -1px overlaps box top border */
+  padding: 5px 16px 5px 12px;
+  /* same border as the chatbox so they read as one surface */
+  border: 1px solid oklch(0.86 0 0);
+  border-bottom: 1px solid var(--background); /* hide box top border under chip → seamless apron */
+  border-radius: 10px 10px 0 0;
+  background: var(--background);
+  color: oklch(0.3 0 0);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   line-height: 1.2;
-  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+  box-shadow: 0 -2px 6px 0 rgba(0,0,0,0.05);
+  position: relative;
+  z-index: 11;
 }
 
 .ams-context-chip-dot {
-  width: 6px;
-  height: 6px;
+  /* Pulsing green live indicator */
+  width: 7px;
+  height: 7px;
   flex: 0 0 auto;
   border-radius: 999px;
-  background: color-mix(in oklch, var(--primary) 86%, var(--foreground));
-  box-shadow: 0 0 0 2px color-mix(in oklch, var(--primary) 12%, transparent);
+  background: oklch(0.58 0.18 145);
+  animation: ams-chip-pulse 2.2s ease-in-out infinite;
 }
 
 .ams-context-chip-text {
@@ -286,6 +306,67 @@
  * OpenUI rendering — preserves the agent's generated UI inside chat bubbles.
  * ------------------------------------------------------------------------- */
 
+.openui-chat-frame {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.75rem;
+  background: hsl(var(--background));
+}
+
+.openui-chat-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.75rem;
+  min-height: 2.625rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.45);
+}
+
+.openui-chat-toolbar-label {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.openui-chat-expand,
+.openui-chat-modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.openui-chat-expand {
+  gap: 0.5rem;
+  min-height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.openui-chat-expand:hover,
+.openui-chat-modal-close:hover {
+  color: hsl(var(--foreground));
+  border-color: hsl(var(--foreground) / 0.25);
+  transform: translateY(-1px);
+}
+
 .openui-chat-message {
   color-scheme: light;
   width: 100%;
@@ -295,6 +376,61 @@
   line-height: 1.45;
   overflow: hidden;
   contain: inline-size;
+  padding: 0.5rem;
+}
+
+.openui-chat-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 1.75rem;
+  background: rgb(15 23 42 / 0.46);
+  backdrop-filter: blur(10px);
+}
+
+.openui-chat-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1100px, 92vw);
+  max-height: 85vh;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: 1rem;
+  background: hsl(var(--background));
+  box-shadow: 0 30px 90px rgb(15 23 42 / 0.28);
+}
+
+.openui-chat-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 3.25rem;
+  padding: 0.75rem 1.125rem;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.45);
+}
+
+.openui-chat-modal-preview-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: hsl(var(--foreground));
+}
+
+.openui-chat-modal-close {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+}
+
+.openui-chat-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem;
 }
 
 .openui-chat-message * {

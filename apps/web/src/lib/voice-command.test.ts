@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildVoiceCommandPrompt } from "./voice-command";
+import {
+  buildVoiceCommandPrompt,
+  getVoiceCommandDisplayText,
+} from "./voice-command";
 
 test("voice command prompt tells the agent to act without requiring the chat panel", () => {
   const prompt = buildVoiceCommandPrompt("create an inspection");
@@ -13,12 +16,26 @@ test("voice command prompt tells the agent to act without requiring the chat pan
   assert.match(prompt, /create an inspection/);
 });
 
-test("voice command prompt keeps Urdu input understandable but fills forms in English", () => {
-  const prompt = buildVoiceCommandPrompt("جامع مسجد کے لیے inspection بناؤ");
+test("voice command prompt explains that input is pre-translated by Google Translate", () => {
+  const prompt = buildVoiceCommandPrompt("create inspection for Jamia Masjid");
 
-  assert.match(prompt, /Urdu, Roman Urdu, or English/i);
+  assert.match(prompt, /translated to English by Google Translate/i);
   assert.match(prompt, /set_form_values/i);
-  assert.match(prompt, /English\/Latin script/i);
   assert.match(prompt, /Jamia Masjid/i);
-  assert.match(prompt, /جامع مسجد/);
+  assert.match(prompt, /create inspection for Jamia Masjid/);
+});
+
+test("voice command prompt lists all module form ids including location_create", () => {
+  const prompt = buildVoiceCommandPrompt("create a location");
+
+  assert.match(prompt, /location_create/);
+  assert.match(prompt, /stock_entry_create/);
+  assert.match(prompt, /stock_register_create/);
+});
+
+test("voice command display text extracts only the translated transcript", () => {
+  const prompt = buildVoiceCommandPrompt("create inspection for CSIT");
+
+  assert.equal(getVoiceCommandDisplayText(prompt), "Voice: create inspection for CSIT");
+  assert.equal(getVoiceCommandDisplayText("regular chat text"), null);
 });

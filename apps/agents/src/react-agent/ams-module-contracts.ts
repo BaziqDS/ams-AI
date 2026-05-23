@@ -30,6 +30,26 @@ const AMS_COPILOT_MODULES: ModuleContract[] = [
     },
   },
   {
+    id: "locations",
+    label: "Locations",
+    listRoute: "/locations",
+    detailRoutePattern: "/locations/{id}",
+    viewCapability: "locations:view",
+    createForm: {
+      formId: "location_create",
+      route: "/locations",
+      requiredCapability: "locations:manage",
+    },
+    scopedForms: [
+      {
+        formId: "sublocation_create",
+        routePattern: "/locations/{id}",
+        samePageOnly: true,
+        requiredCapability: "locations:manage",
+      },
+    ],
+  },
+  {
     id: "categories",
     label: "Categories",
     listRoute: "/categories",

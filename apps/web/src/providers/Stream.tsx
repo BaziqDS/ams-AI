@@ -1,3 +1,5 @@
+"use client";
+
 import React, {
   createContext,
   useContext,
@@ -11,7 +13,7 @@ import {
   uiMessageReducer,
   type UIMessage,
   type RemoveUIMessage,
-} from "@langchain/langgraph-sdk/react-ui";
+} from "@langchain/langgraph-sdk/react-ui/server";
 import { useQueryState } from "nuqs";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";

@@ -8,6 +8,7 @@ import {
 } from "langchain";
 
 import { formSubmitApprovalMiddleware } from "./approval-middleware.js";
+import { frontendFailureGuardMiddleware } from "./frontend-failure-guard.js";
 import {
   buildGroqChatModelConfig,
   buildOpenRouterChatModelConfig,
@@ -60,6 +61,7 @@ const agent = createAgent({
     }),
     todoListMiddleware(),
     formSubmitApprovalMiddleware,
+    frontendFailureGuardMiddleware,
     contextEditingMiddleware(),
   ],
   systemPrompt: SYSTEM_PROMPT_TEMPLATE.replace(

@@ -6,6 +6,10 @@ import { buildAgentRunConfig } from "./agent-run-config";
 
 type FrontendActionStatus = "running" | "resuming" | "completed" | "failed";
 
+type PageContextLike = {
+  readables?: unknown;
+};
+
 type FrontendActionSubmit = (
   values: Record<string, never>,
   options: {
@@ -34,6 +38,89 @@ function notify(
   deps.onStatus?.(status, message);
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeRoute(path: string) {
+  return path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+}
+
+function stringArg(args: unknown, keys: string[]) {
+  if (!isObject(args)) return undefined;
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return undefined;
+}
+
+function getCurrentRoute(pageContext: unknown) {
+  if (!isObject(pageContext)) return undefined;
+  const readables = (pageContext as PageContextLike).readables;
+  if (!Array.isArray(readables)) return undefined;
+
+  for (const readable of readables) {
+    if (!isObject(readable) || readable.id !== "__ams_runtime_context") {
+      continue;
+    }
+    const value = readable.value;
+    if (!isObject(value)) return undefined;
+    const route = value.route;
+    if (typeof route === "string" && route.trim()) return route;
+    if (isObject(route) && typeof route.pathname === "string" && route.pathname.trim()) {
+      return route.pathname;
+    }
+  }
+  return undefined;
+}
+
+function getActiveFormId(pageContext: unknown) {
+  if (!isObject(pageContext)) return null;
+  const readables = (pageContext as PageContextLike).readables;
+  if (!Array.isArray(readables)) return null;
+
+  for (const readable of readables) {
+    if (!isObject(readable)) continue;
+    const value = readable.value;
+    if (!isObject(value)) continue;
+    const activeForm = value.activeForm;
+    if (!isObject(activeForm)) continue;
+    const formId = activeForm.formId;
+    if (typeof formId === "string" && formId.trim()) return formId;
+  }
+  return null;
+}
+
+function enrichSubmitResultWithPageState(
+  interrupt: FrontendActionInterrupt,
+  result: unknown,
+  pageContext: unknown,
+) {
+  if (interrupt.action.name !== "request_form_submit" || !isObject(result)) {
+    return result;
+  }
+
+  const currentRoute = getCurrentRoute(pageContext);
+  const activeFormId = getActiveFormId(pageContext);
+  const submittedFormId = stringArg(interrupt.action.args, ["formId", "form_id"]);
+  const redirectTo =
+    typeof result.redirectTo === "string" && result.redirectTo.trim()
+      ? result.redirectTo
+      : undefined;
+
+  return {
+    ...result,
+    ...(currentRoute ? { currentRoute } : {}),
+    activeFormId,
+    formClosed: submittedFormId ? activeFormId !== submittedFormId : activeFormId === null,
+    ...(submittedFormId ? { submittedFormId } : {}),
+    ...(currentRoute && redirectTo
+      ? { routeMatchesRedirect: normalizeRoute(currentRoute) === normalizeRoute(redirectTo) }
+      : {}),
+  };
+}
+
 export async function runFrontendActionInterrupt(
   interrupt: FrontendActionInterrupt,
   deps: FrontendActionRunnerDeps,
@@ -50,11 +137,16 @@ export async function runFrontendActionInterrupt(
       "Browser action finished with ready page context. Returning control to the agent...",
     );
     const pageContext = await deps.getFreshContext();
+    const resumeResult = enrichSubmitResultWithPageState(
+      interrupt,
+      result,
+      pageContext,
+    );
     deps.submit(
       {},
       {
         command: {
-          resume: buildFrontendActionResume(interrupt, result),
+          resume: buildFrontendActionResume(interrupt, resumeResult),
         },
         config: buildAgentRunConfig(pageContext),
         streamMode: ["values", "custom"],
