@@ -6,6 +6,8 @@ import React, {
   ReactNode,
   useState,
   useEffect,
+  useMemo,
+  useRef,
 } from "react";
 import { useStream } from "@langchain/langgraph-sdk/react";
 import { type Message } from "@langchain/langgraph-sdk";
@@ -55,8 +57,13 @@ const useTypedStream = useStream<
   }
 >;
 
-type StreamContextType = ReturnType<typeof useTypedStream>;
+type StreamContextType = ReturnType<typeof useTypedStream> & {
+  embeddedThreadReady: boolean;
+  resetThread: () => void;
+};
 const StreamContext = createContext<StreamContextType | undefined>(undefined);
+const EMBEDDED_THREAD_STORAGE_KEY = "ams-copilot-thread-id";
+export const CLEAR_EMBEDDED_THREAD_EVENT = "ams-copilot-clear-embedded-thread";
 
 async function sleep(ms = 4000) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -87,19 +94,58 @@ const StreamSession = ({
   apiKey,
   apiUrl,
   assistantId,
+  onResetSession,
 }: {
   children: ReactNode;
   apiKey: string | null;
   apiUrl: string;
   assistantId: string;
+  onResetSession: () => void;
 }) => {
   const [threadId, setThreadId] = useQueryState("threadId");
   const { getThreads, setThreads } = useThreads();
+  const isEmbedded = process.env.NEXT_PUBLIC_EMBEDDED === "true";
+  const [embeddedThreadReady, setEmbeddedThreadReady] = useState(!isEmbedded);
+  const embeddedBootClearedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isEmbedded) {
+      setEmbeddedThreadReady(true);
+      return;
+    }
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(EMBEDDED_THREAD_STORAGE_KEY);
+    }
+    if (embeddedBootClearedRef.current) {
+      setEmbeddedThreadReady(true);
+      return;
+    }
+    if (threadId) {
+      setEmbeddedThreadReady(false);
+      void setThreadId(null);
+      return;
+    }
+
+    embeddedBootClearedRef.current = true;
+    setEmbeddedThreadReady(true);
+  }, [isEmbedded, setThreadId, threadId]);
+
+  useEffect(() => {
+    if (!isEmbedded || typeof window === "undefined") return;
+    const clearStoredThread = () => {
+      window.localStorage.removeItem(EMBEDDED_THREAD_STORAGE_KEY);
+    };
+    window.addEventListener(CLEAR_EMBEDDED_THREAD_EVENT, clearStoredThread);
+    return () => {
+      window.removeEventListener(CLEAR_EMBEDDED_THREAD_EVENT, clearStoredThread);
+    };
+  }, [isEmbedded]);
+
   const streamValue = useTypedStream({
     apiUrl,
     apiKey: apiKey ?? undefined,
     assistantId,
-    threadId: threadId ?? null,
+    threadId: embeddedThreadReady ? threadId ?? null : null,
     onCustomEvent: (event, options) => {
       console.log("[copilot/stream] custom event:", event);
       // Frontend tool calls — the agent asks the browser to run an action
@@ -139,6 +185,16 @@ const StreamSession = ({
     },
   });
 
+  const resetThread = React.useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(EMBEDDED_THREAD_STORAGE_KEY);
+    }
+    streamValue.stop();
+    void setThreadId(null);
+    setEmbeddedThreadReady(true);
+    onResetSession();
+  }, [onResetSession, setThreadId, streamValue]);
+
   useEffect(() => {
     checkGraphStatus(apiUrl, apiKey).then((ok) => {
       if (!ok) {
@@ -157,8 +213,13 @@ const StreamSession = ({
     });
   }, [apiKey, apiUrl]);
 
+  const contextValue = useMemo(
+    () => ({ ...streamValue, embeddedThreadReady, resetThread }),
+    [embeddedThreadReady, resetThread, streamValue],
+  );
+
   return (
-    <StreamContext.Provider value={streamValue}>
+    <StreamContext.Provider value={contextValue}>
       {children}
     </StreamContext.Provider>
   );
@@ -171,6 +232,7 @@ const DEFAULT_ASSISTANT_ID = "agent";
 export const StreamProvider: React.FC<{ children: ReactNode }> = ({
   children,
 }) => {
+  const [sessionKey, setSessionKey] = useState(0);
   // Get environment variables
   const envApiUrl: string | undefined = process.env.NEXT_PUBLIC_API_URL;
   const envAssistantId: string | undefined =
@@ -301,7 +363,13 @@ export const StreamProvider: React.FC<{ children: ReactNode }> = ({
   }
 
   return (
-    <StreamSession apiKey={apiKey} apiUrl={apiUrl} assistantId={assistantId}>
+    <StreamSession
+      key={sessionKey}
+      apiKey={apiKey}
+      apiUrl={apiUrl}
+      assistantId={assistantId}
+      onResetSession={() => setSessionKey((key) => key + 1)}
+    >
       {children}
     </StreamSession>
   );

@@ -22,7 +22,9 @@ import { isHitlInterruptSchema } from "@/lib/hitl-interrupt";
 import { FrontendActionInterruptView } from "./frontend-action-interrupt";
 import { isFrontendActionInterruptSchema } from "@/lib/frontend-action-interrupt";
 import {
+  extractSimpleOpenUiTextContent,
   getOpenUiLang,
+  isSimpleOpenUiTextContent,
   OpenUiAssistantMessage,
 } from "../openui-message";
 import {
@@ -32,6 +34,7 @@ import { copilotBridge } from "@/lib/copilot-bridge";
 import { isAmsRelativeRoute } from "@/lib/ams-route";
 import { buildAgentRunConfig } from "@/lib/agent-run-config";
 import { extractModelReasoningTelemetry } from "@/lib/model-reasoning";
+import { useCallback, useState } from "react";
 
 const LoadExternalComponent = dynamic(
   () => import("../external-ui-component"),
@@ -133,6 +136,7 @@ export function AssistantMessage({
 }) {
   const content = message?.content ?? [];
   const contentString = getContentString(content);
+  const [openUiPreviewAction, setOpenUiPreviewAction] = useState<(() => void) | null>(null);
   const [hideToolCalls] = useQueryState(
     "hideToolCalls",
     parseAsBoolean.withDefault(false),
@@ -152,6 +156,12 @@ export function AssistantMessage({
     ? parseAnthropicStreamedToolCalls(content)
     : undefined;
   const openUiCode = getOpenUiLang(contentString);
+  const isSimpleOpenUiText = openUiCode
+    ? isSimpleOpenUiTextContent(openUiCode)
+    : false;
+  const simpleOpenUiText = openUiCode
+    ? extractSimpleOpenUiTextContent(openUiCode)
+    : null;
   const shouldHideNoProactiveResponse =
     contentString.trim() === NO_PROACTIVE_RESPONSE;
 
@@ -165,7 +175,7 @@ export function AssistantMessage({
   const hasInterruptToShow =
     !!threadInterrupt?.value && (isLastMessage || hasNoAIOrToolMessages);
   const needsWideMessage =
-    !!openUiCode ||
+    (!!openUiCode && !isSimpleOpenUiText) ||
     hasInterruptToShow ||
     !!hasToolCalls ||
     hasAnthropicToolCalls ||
@@ -175,6 +185,12 @@ export function AssistantMessage({
     message.tool_calls?.some(
       (tc) => tc.args && Object.keys(tc.args).length > 0,
     );
+  const handleOpenUiPreviewActionChange = useCallback(
+    (action: (() => void) | null) => {
+      setOpenUiPreviewAction(() => action);
+    },
+    [],
+  );
   const handleOpenUiAction = async (event: ActionEvent) => {
     const action = event as ActionEvent & {
       humanFriendlyMessage?: string;
@@ -317,7 +333,7 @@ export function AssistantMessage({
             needsWideMessage && "w-full min-w-0",
           )}
         >
-          {openUiCode ? (
+          {openUiCode && !isSimpleOpenUiText ? (
             <OpenUiAssistantMessage
               code={openUiCode}
               fallback={
@@ -327,10 +343,14 @@ export function AssistantMessage({
               }
               isStreaming={isLoading && isLastMessage}
               onAction={handleOpenUiAction}
+              onPreviewActionChange={handleOpenUiPreviewActionChange}
+              compactText={isSimpleOpenUiText}
             />
-          ) : contentString.length > 0 ? (
-            <div className="py-1">
-              <MarkdownText>{contentString}</MarkdownText>
+          ) : isSimpleOpenUiText || contentString.length > 0 ? (
+            <div className="ams-assistant-message-card">
+              <MarkdownText>
+                {isSimpleOpenUiText ? simpleOpenUiText ?? "" : contentString}
+              </MarkdownText>
             </div>
           ) : null}
 
@@ -385,6 +405,7 @@ export function AssistantMessage({
               isLoading={isLoading}
               isAiMessage={true}
               handleRegenerate={() => handleRegenerate(parentCheckpoint)}
+              handlePreview={openUiCode ? openUiPreviewAction ?? undefined : undefined}
             />
           </div>
         </div>

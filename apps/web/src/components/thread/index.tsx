@@ -1,10 +1,12 @@
 "use client";
 
 import { v4 as uuidv4 } from "uuid";
-import { ReactNode, useCallback, useEffect, useRef } from "react";
+import { ReactNode, useCallback, useEffect, useMemo, useRef } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useStreamContext } from "@/providers/Stream";
+import type { TodoItem } from "@/providers/Stream";
+import { CLEAR_EMBEDDED_THREAD_EVENT } from "@/providers/Stream";
 import { useState, FormEvent } from "react";
 import { Button } from "../ui/button";
 import { Checkpoint, Message } from "@langchain/langgraph-sdk";
@@ -57,6 +59,20 @@ const RESILIENT_STREAM_OPTIONS = {
   onDisconnect: "continue" as const,
 };
 
+type ContextChipState = {
+  kind: "form" | "list" | "detail" | "page";
+  title: string;
+  meta?: string;
+  iconKey?: string;
+};
+
+function startNewThread(resetThread: () => void) {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(CLEAR_EMBEDDED_THREAD_EVENT));
+  }
+  resetThread();
+}
+
 function notifyParentAssistantMessage(
   messageId: string | undefined,
   text: string,
@@ -68,6 +84,56 @@ function notifyParentAssistantMessage(
       type: "ASSISTANT_MESSAGE",
       messageId,
       text,
+    },
+    "*",
+  );
+}
+
+function notifyParentHumanMessage(messageId: string | undefined, text: string) {
+  if (!messageId || typeof window === "undefined" || window.parent === window) return;
+  window.parent.postMessage(
+    {
+      source: "ams-copilot-iframe",
+      type: "HUMAN_MESSAGE",
+      messageId,
+      text,
+    },
+    "*",
+  );
+}
+
+function notifyParentAssistantLoading(isLoading: boolean) {
+  if (typeof window === "undefined" || window.parent === window) return;
+  window.parent.postMessage(
+    {
+      source: "ams-copilot-iframe",
+      type: "ASSISTANT_LOADING",
+      isLoading,
+    },
+    "*",
+  );
+}
+
+function notifyParentReady(threadId: string | null) {
+  if (typeof window === "undefined" || window.parent === window) return;
+  window.parent.postMessage(
+    {
+      source: "ams-copilot-iframe",
+      type: "COPILOT_READY",
+      threadId,
+    },
+    "*",
+  );
+}
+
+function notifyParentTodoState(todos: TodoItem[]) {
+  if (typeof window === "undefined" || window.parent === window) return;
+  const current = todos.find((todo) => todo.status === "in_progress") ?? null;
+  window.parent.postMessage(
+    {
+      source: "ams-copilot-iframe",
+      type: "TODO_STATE",
+      current,
     },
     "*",
   );
@@ -114,12 +180,151 @@ function formatRouteLabel(pathname: string | null): string {
     .split("-")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
-  // Singular for a specific record, plural section name for the list
-  const singular = name.endsWith("s") ? name.slice(0, -1) : name;
+  // Singular for a specific record, plural section name for the list.
+  const singular = name.endsWith("ies")
+    ? `${name.slice(0, -3)}y`
+    : name.endsWith("s")
+      ? name.slice(0, -1)
+      : name;
   return id ? `${singular} #${id}` : name;
 }
 
-function deriveContextLabel(context: PageContext | null): string | null {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function formatEntityLabel(value: unknown, fallback: string) {
+  const raw = typeof value === "string" && value.trim() ? value : fallback;
+  return raw
+    .replace(/[-_]/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function compactText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized || null;
+}
+
+function recordDisplayName(record: Record<string, unknown>, fallback: string): string {
+  const primary =
+    compactText(record.name) ??
+    compactText(record.title) ??
+    compactText(record.label) ??
+    compactText(record.display_name) ??
+    compactText(record.category_display) ??
+    compactText(record.item_name);
+  const code =
+    compactText(record.code) ??
+    compactText(record.item_code) ??
+    compactText(record.contract_no) ??
+    compactText(record.contract_number);
+
+  if (primary && code && !primary.includes(code)) return `${primary} (${code})`;
+  if (primary) return primary;
+  if (code) return code;
+
+  const id = record.id;
+  return typeof id === "string" || typeof id === "number"
+    ? `${fallback} #${id}`
+    : fallback;
+}
+
+function contextIconKey(pathname: string | null, entity?: unknown) {
+  const haystack = `${pathname ?? ""} ${String(entity ?? "")}`.toLowerCase();
+  if (haystack.includes("categor")) return "categories";
+  if (haystack.includes("location")) return "locations";
+  if (haystack.includes("item")) return "items";
+  if (haystack.includes("stock-register")) return "stock-registers";
+  if (haystack.includes("stock-entr")) return "stock-entries";
+  if (haystack.includes("inspection")) return "inspections";
+  if (haystack.includes("maintenance")) return "maintenance";
+  if (haystack.includes("depreciation")) return "depreciation";
+  if (haystack.includes("user")) return "users";
+  if (haystack.includes("role")) return "roles";
+  return "page";
+}
+
+function ContextChipIcon({ iconKey }: { iconKey?: string }) {
+  const common = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.75,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {iconKey === "locations" ? (
+        <>
+          <path {...common} d="M12 21s-7-6.5-7-12a7 7 0 1114 0c0 5.5-7 12-7 12z" />
+          <circle {...common} cx="12" cy="9" r="2.5" />
+        </>
+      ) : iconKey === "categories" ? (
+        <>
+          <path {...common} d="M20.5 13.5l-7 7a1.5 1.5 0 01-2.12 0L3 12.12V3h9.12l8.38 8.38a1.5 1.5 0 010 2.12z" />
+          <circle cx="7.5" cy="7.5" r="1.15" fill="currentColor" />
+        </>
+      ) : iconKey === "items" ? (
+        <>
+          <path {...common} d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" />
+          <path {...common} d="M3.3 7L12 12l8.7-5M12 22V12" />
+        </>
+      ) : iconKey === "stock-entries" || iconKey === "page" ? (
+        <>
+          <path {...common} d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z" />
+          <path {...common} d="M14 3v6h6M9 13h6M9 17h4" />
+        </>
+      ) : iconKey === "inspections" ? (
+        <>
+          <path {...common} d="M9 11l3 3 7-7" />
+          <path {...common} d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" />
+        </>
+      ) : iconKey === "maintenance" ? (
+        <>
+          <path {...common} d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.1-3.1a5 5 0 01-6.6 6.6l-6 6a2.1 2.1 0 01-3-3l6-6a5 5 0 016.6-6.6z" />
+          <path {...common} d="M4 20l4-4" />
+        </>
+      ) : iconKey === "stock-registers" ? (
+        <>
+          <path {...common} d="M4 19.5A2.5 2.5 0 016.5 17H20" />
+          <path {...common} d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />
+        </>
+      ) : iconKey === "depreciation" ? (
+        <>
+          <path {...common} d="M4 19h16M7 16V8M12 16V5M17 16v-3" />
+          <path {...common} d="M5 8l5-5 4 4 5-5" />
+        </>
+      ) : iconKey === "users" ? (
+        <>
+          <circle {...common} cx="9" cy="8" r="3.2" />
+          <path {...common} d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6" />
+          <circle {...common} cx="17" cy="7" r="2.6" />
+          <path {...common} d="M21 19c0-2.7-1.8-5-4.5-5" />
+        </>
+      ) : iconKey === "roles" ? (
+        <>
+          <rect {...common} x="4" y="5" width="16" height="14" rx="3" />
+          <path {...common} d="M8 9h8M8 13h5" />
+        </>
+      ) : (
+        <>
+          <path {...common} d="M3 12l9-8 9 8" />
+          <path {...common} d="M5 10v10h14V10" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function deriveContextChip(context: PageContext | null): ContextChipState | null {
   const pathname = readPathname(context);
   if (!context?.readables.length && !pathname) return null;
 
@@ -141,19 +346,60 @@ function deriveContextLabel(context: PageContext | null): string | null {
     const name = (activeFormTitle || activeFormId)
       .replace(/[-_]/g, " ")
       .replace(/\b\w/g, (c) => c.toUpperCase());
-    return `${name} ? form`;
+    return {
+      kind: "form",
+      title: `${name} form`,
+      iconKey: contextIconKey(pathname, activeFormId),
+    };
+  }
+
+  const detailContext = context?.readables.find((readable) => {
+    const value = readable.value;
+    return (
+      isRecord(value) &&
+      value.page_kind === "detail" &&
+      typeof value.route === "string" &&
+      value.route === pathname
+    );
+  })?.value as
+    | {
+        entity?: unknown;
+        selected_record?: unknown;
+      }
+    | undefined;
+
+  if (detailContext) {
+    const entityLabel = formatEntityLabel(
+      detailContext.entity,
+      formatRouteLabel(pathname),
+    );
+    return {
+      kind: "detail",
+      title: isRecord(detailContext.selected_record)
+        ? recordDisplayName(detailContext.selected_record, entityLabel)
+        : formatRouteLabel(pathname),
+      meta: `${entityLabel} detail`,
+      iconKey: contextIconKey(pathname, detailContext.entity),
+    };
   }
 
   const currentList = context?.readables.find((readable) => {
     const value = readable.value as
-      | { route?: unknown; visible_rows?: unknown[]; filtered_total?: unknown }
+      | {
+          route?: unknown;
+          visible_rows?: unknown[];
+          filtered_total?: unknown;
+          entity?: unknown;
+        }
       | undefined;
     return (
       typeof value?.route === "string" &&
       value.route === pathname &&
       Array.isArray(value.visible_rows)
     );
-  })?.value as { visible_rows?: unknown[]; filtered_total?: unknown } | undefined;
+  })?.value as
+    | { visible_rows?: unknown[]; filtered_total?: unknown; entity?: unknown }
+    | undefined;
 
   if (currentList?.visible_rows) {
     const visibleCount = currentList.visible_rows.length;
@@ -163,10 +409,20 @@ function deriveContextLabel(context: PageContext | null): string | null {
         ? currentList.filtered_total
         : null;
     const countText = total ? `${visibleCount} of ${total}` : `${visibleCount}`;
-    return `${formatRouteLabel(pathname)} · ${countText} rows`;
+    return {
+      kind: "list",
+      title: formatEntityLabel(currentList.entity, formatRouteLabel(pathname)),
+      meta: `List page - ${countText} visible`,
+      iconKey: contextIconKey(pathname, currentList.entity),
+    };
   }
 
-  return formatRouteLabel(pathname);
+  return {
+    kind: "page",
+    title: formatRouteLabel(pathname),
+    meta: "Current page",
+    iconKey: contextIconKey(pathname),
+  };
 }
 
 function StickyToBottomContent(props: {
@@ -230,7 +486,7 @@ export function Thread() {
     parseAsBoolean.withDefault(false),
   );
   const [input, setInput] = useState("");
-  const [contextLabel, setContextLabel] = useState<string | null>(null);
+  const [contextChip, setContextChip] = useState<ContextChipState | null>(null);
   const [firstTokenReceived, setFirstTokenReceived] = useState(false);
   const [showTodos, setShowTodos] = useState(false);
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
@@ -239,25 +495,38 @@ export function Thread() {
   const messages = stream.messages;
   const renderableMessages = getRenderableChatMessages(messages);
   const isLoading = stream.isLoading;
-  const todos = stream.values.todos ?? [];
-  const hasActiveTodo = todos.some((todo) => todo.status === "in_progress");
+  const todos = useMemo(() => stream.values.todos ?? [], [stream.values.todos]);
+  const hasVisibleTodo = todos.some((todo) => String(todo.status) !== "completed");
+  const showContextChip = Boolean(contextChip && !hasVisibleTodo);
 
   const lastError = useRef<string | undefined>(undefined);
   const pendingVoiceCommandRef = useRef<VoiceCommand | null>(null);
   const pendingQuickMessageRef = useRef<string | null>(null);
   const handledVoiceCommandIdsRef = useRef(new Set<string>());
 
+  const handleStartNewThread = useCallback(() => {
+    pendingQuickMessageRef.current = null;
+    pendingVoiceCommandRef.current = null;
+    handledVoiceCommandIdsRef.current.clear();
+    prevMessageLength.current = 0;
+    announcedAssistantMessageIds.current.clear();
+    setInput("");
+    setFirstTokenReceived(false);
+    setShowTodos(false);
+    startNewThread(stream.resetThread);
+  }, [stream.resetThread]);
+
   useEffect(() => {
     let mounted = true;
     copilotBridge.getFreshContext().then((context) => {
       if (mounted) {
-        setContextLabel(deriveContextLabel(context));
+        setContextChip(deriveContextChip(context));
       }
     });
 
     const onContextUpdate = (event: Event) => {
       const context = (event as CustomEvent<PageContext>).detail;
-      setContextLabel(deriveContextLabel(context));
+      setContextChip(deriveContextChip(context));
     };
 
     window.addEventListener(COPILOT_CONTEXT_EVENT, onContextUpdate);
@@ -296,10 +565,18 @@ export function Thread() {
   }, [stream.error]);
 
   useEffect(() => {
-    if (!hasActiveTodo) {
+    if (!hasVisibleTodo) {
       setShowTodos(false);
     }
-  }, [hasActiveTodo]);
+  }, [hasVisibleTodo]);
+
+  useEffect(() => {
+    notifyParentAssistantLoading(isLoading);
+  }, [isLoading]);
+
+  useEffect(() => {
+    notifyParentTodoState(todos);
+  }, [todos]);
 
   // TODO: this should be part of the useStream hook
   const prevMessageLength = useRef(0);
@@ -341,6 +618,9 @@ export function Thread() {
       type: "human",
       content: trimmed,
     };
+    if (!options.hidden) {
+      notifyParentHumanMessage(newHumanMessage.id, trimmed);
+    }
 
     const toolMessages = ensureToolCallsHaveResponses(stream.messages);
     const pageContext = await copilotBridge.getFreshContext({
@@ -407,17 +687,28 @@ export function Thread() {
     const onParentMessage = (event: MessageEvent) => {
       if (event.data?.source !== "ams-copilot") return;
       if (event.data?.type === "START_NEW_THREAD") {
-        setThreadId(null);
+        handleStartNewThread();
         return;
       }
       if (event.data?.type === "QUICK_MESSAGE") {
         const text = typeof event.data.text === "string" ? event.data.text.trim() : "";
         if (!text) return;
-        if (stream.isLoading) {
+        if (stream.isLoading || !stream.embeddedThreadReady) {
           pendingQuickMessageRef.current = text;
           return;
         }
         void submitUserText(text);
+        return;
+      }
+      if (event.data?.type === "STOP_RUN") {
+        // Clear any queued messages from the detached composer or voice
+        // command so they do NOT auto-submit the moment the stream finishes
+        // winding down — that would silently start a new run right after
+        // the user explicitly asked to stop, which re-locks the parent's
+        // detached composer and traps the user in a "stuck pending" state.
+        pendingQuickMessageRef.current = null;
+        pendingVoiceCommandRef.current = null;
+        stream.stop();
         return;
       }
       if (event.data?.type === "SET_HIDE_TOOL_CALLS") {
@@ -429,14 +720,25 @@ export function Thread() {
     return () => {
       window.removeEventListener("message", onParentMessage);
     };
-  }, [setThreadId, stream.isLoading, submitUserText]);
+  }, [handleStartNewThread, stream.embeddedThreadReady, stream.isLoading, submitUserText]);
 
   useEffect(() => {
-    if (stream.isLoading || !pendingQuickMessageRef.current) return;
+    if (
+      stream.isLoading ||
+      !stream.embeddedThreadReady ||
+      !pendingQuickMessageRef.current
+    ) {
+      return;
+    }
     const text = pendingQuickMessageRef.current;
     pendingQuickMessageRef.current = null;
     void submitUserText(text);
-  }, [stream.isLoading, submitUserText]);
+  }, [stream.embeddedThreadReady, stream.isLoading, submitUserText]);
+
+  useEffect(() => {
+    if (!stream.embeddedThreadReady) return;
+    notifyParentReady(threadId ?? null);
+  }, [stream.embeddedThreadReady, threadId]);
 
   useEffect(() => {
     notifyParentHitlInterrupt(stream.interrupt?.value);
@@ -596,7 +898,7 @@ export function Thread() {
               </div>
               <motion.button
                 className="flex gap-2 items-center cursor-pointer"
-                onClick={() => setThreadId(null)}
+                onClick={handleStartNewThread}
                 animate={{
                   marginLeft: !chatHistoryOpen ? 48 : 0,
                 }}
@@ -619,7 +921,7 @@ export function Thread() {
                 className="p-4"
                 tooltip="New thread"
                 variant="ghost"
-                onClick={() => setThreadId(null)}
+                onClick={handleStartNewThread}
               >
                 <SquarePen className="size-5" />
               </TooltipIconButton>
@@ -683,19 +985,31 @@ export function Thread() {
                 <ScrollToBottom className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 animate-in fade-in-0 zoom-in-95" />
 
                 <div className="w-full max-w-3xl min-w-0 mx-auto relative z-10">
-                  {contextLabel ? (
-                    <div className="ams-context-chip" aria-label="Current AI context">
-                      <span className="ams-context-chip-dot" aria-hidden="true" />
-                      <span className="ams-context-chip-text">{contextLabel}</span>
+                  {showContextChip ? (
+                    <div
+                      className={`ams-context-chip is-${contextChip!.kind}`}
+                      aria-label="Current AI context"
+                    >
+                      <span className="ams-context-chip-icon" aria-hidden="true">
+                        <ContextChipIcon iconKey={contextChip!.iconKey} />
+                      </span>
+                      <span className="ams-context-chip-copy">
+                        <span className="ams-context-chip-text">{contextChip!.title}</span>
+                        {contextChip!.meta ? (
+                          <span className="ams-context-chip-meta">{contextChip!.meta}</span>
+                        ) : null}
+                      </span>
                     </div>
                   ) : null}
-                <div className={`ams-chat-input-box bg-background border w-full min-w-0 max-w-full overflow-hidden ${contextLabel ? "rounded-tr-[18px] rounded-b-[18px] rounded-tl-none" : "rounded-[18px]"}`}>
-                  <TodosPanel
-                    todos={todos}
-                    expanded={showTodos}
-                    onExpandedChange={setShowTodos}
-                    attached
-                  />
+                <div className="ams-chat-input-box bg-background border w-full min-w-0 max-w-full overflow-hidden rounded-[18px]">
+                  {hasVisibleTodo ? (
+                    <TodosPanel
+                      todos={todos}
+                      expanded={showTodos}
+                      onExpandedChange={setShowTodos}
+                      attached
+                    />
+                  ) : null}
                   <form
                     onSubmit={handleSubmit}
                     className="grid min-w-0 grid-rows-[1fr_auto] gap-1 max-w-3xl mx-auto"
@@ -729,7 +1043,7 @@ export function Thread() {
                           className="size-8 rounded-full text-muted-foreground hover:bg-white/70"
                           aria-label="New chat"
                           title="New chat"
-                          onClick={() => setThreadId(null)}
+                          onClick={handleStartNewThread}
                         >
                           <Plus className="size-4" />
                         </Button>

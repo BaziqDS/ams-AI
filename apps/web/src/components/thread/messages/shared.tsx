@@ -7,6 +7,7 @@ import {
   CopyCheck,
   ChevronLeft,
   ChevronRight,
+  Maximize2,
 } from "lucide-react";
 import { TooltipIconButton } from "../tooltip-icon-button";
 import { AnimatePresence, motion } from "framer-motion";
@@ -45,7 +46,7 @@ function ContentCopyable({
             exit={{ opacity: 0, scale: 0.8 }}
             transition={{ duration: 0.15 }}
           >
-            <CopyCheck className="text-green-500" />
+            <CopyCheck className="size-4 text-green-500" />
           </motion.div>
         ) : (
           <motion.div
@@ -55,7 +56,7 @@ function ContentCopyable({
             exit={{ opacity: 0, scale: 0.8 }}
             transition={{ duration: 0.15 }}
           >
-            <Copy />
+            <Copy className="size-4 text-foreground" />
           </motion.div>
         )}
       </AnimatePresence>
@@ -120,6 +121,7 @@ export function CommandBar({
   setIsEditing,
   handleSubmitEdit,
   handleRegenerate,
+  handlePreview,
   isLoading,
 }: {
   content: string;
@@ -129,6 +131,7 @@ export function CommandBar({
   setIsEditing?: React.Dispatch<React.SetStateAction<boolean>>;
   handleSubmitEdit?: () => void;
   handleRegenerate?: () => void;
+  handlePreview?: () => void;
   isLoading: boolean;
 }) {
   if (isHumanMessage && isAiMessage) {
@@ -188,6 +191,15 @@ export function CommandBar({
   return (
     <div className="flex items-center gap-2">
       <ContentCopyable content={content} disabled={isLoading} />
+      {isAiMessage && !!handlePreview && (
+        <TooltipIconButton
+          tooltip="Preview"
+          variant="ghost"
+          onClick={handlePreview}
+        >
+          <Maximize2 className="size-4 text-foreground" />
+        </TooltipIconButton>
+      )}
       {isAiMessage && !!handleRegenerate && (
         <TooltipIconButton
           disabled={isLoading}
@@ -195,7 +207,7 @@ export function CommandBar({
           variant="ghost"
           onClick={handleRegenerate}
         >
-          <RefreshCcw />
+          <RefreshCcw className="size-4 text-foreground" />
         </TooltipIconButton>
       )}
       {showEdit && (

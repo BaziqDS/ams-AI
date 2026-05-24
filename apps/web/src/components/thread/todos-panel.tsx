@@ -70,26 +70,26 @@ export function TodosPanel({
       <button
         type="button"
         className={cn(
-          "flex w-full min-w-0 items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-muted/60",
+          "flex w-full min-w-0 max-w-full items-center justify-between gap-3 overflow-hidden px-3 py-2 text-left transition-colors hover:bg-muted/60",
           expanded && "border-b",
         )}
         aria-expanded={expanded}
         onClick={() => onExpandedChange(!expanded)}
       >
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
           {current ? (
             <LoaderCircle className="size-4 shrink-0 animate-spin text-blue-600" />
           ) : (
             <ListChecks className="size-4 shrink-0 text-emerald-600" />
           )}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1 overflow-hidden">
             <div className="text-xs font-semibold text-foreground">Tasks</div>
             <div className="truncate text-[11px] text-muted-foreground">
               {current ? `Now: ${summary}` : summary}
             </div>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex max-w-[42%] shrink-0 items-center justify-end gap-2 overflow-hidden">
           <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
             {completedCount}/{todos.length}
           </span>

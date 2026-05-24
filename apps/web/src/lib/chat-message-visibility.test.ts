@@ -45,3 +45,26 @@ test("hidden non-voice messages remain hidden", () => {
     },
   ]);
 });
+
+test("system messages are never rendered as chat content", () => {
+  const messages = getRenderableChatMessages([
+    {
+      id: "system-1",
+      type: "system",
+      content: "internal system prompt",
+    },
+    {
+      id: "visible-1",
+      type: "ai",
+      content: "visible assistant response",
+    },
+  ]);
+
+  assert.deepEqual(messages, [
+    {
+      id: "visible-1",
+      type: "ai",
+      content: "visible assistant response",
+    },
+  ]);
+});

@@ -122,6 +122,17 @@ function renderPrimitive(value: unknown): string {
   return String(value);
 }
 
+function renderSubmittedValuesSummary(value: unknown): string | null {
+  if (!isObject(value)) return null;
+  const entries = Object.entries(value)
+    .filter(([, entry]) => entry !== undefined && entry !== null && entry !== "")
+    .slice(0, 8)
+    .map(([key, entry]) => `${key}=${renderPrimitive(entry)}`);
+  if (entries.length === 0) return null;
+  const remaining = Object.keys(value).length - entries.length;
+  return `${entries.join(", ")}${remaining > 0 ? `, +${remaining} more` : ""}`;
+}
+
 function findReadable(readables: Readable[], id: string): unknown {
   return readables.find((r) => r.id === id)?.value;
 }
@@ -635,6 +646,7 @@ function formatActivity(activity: unknown): string[] {
       typeof result?.redirectTo === "string" && result.redirectTo
         ? result.redirectTo
         : undefined;
+    const submittedValues = renderSubmittedValuesSummary(result?.submittedValues);
     const continuation = [
       recordId ? `recordId=${recordId}` : undefined,
       redirectTo ? `redirectTo=${redirectTo}` : undefined,
@@ -644,6 +656,9 @@ function formatActivity(activity: unknown): string[] {
     );
     if (continuation.length > 0) {
       lines.push(`- Last submit result details: ${continuation.join(", ")}`);
+    }
+    if (submittedValues) {
+      lines.push(`- Last submit submitted values: ${submittedValues}`);
     }
   }
 
@@ -668,6 +683,47 @@ function formatActivity(activity: unknown): string[] {
 
   lines.push("</recent_activity>");
   return lines;
+}
+
+/**
+ * Render an action parameter's allowed-value hint when present.
+ * The frontend's useCopilotListControls embeds "Allowed values: ..." in each
+ * filter's description; we surface those so the agent does not guess enum
+ * values like "not_completed" or "incomplete".
+ */
+function formatActionParamHint(
+  paramName: string,
+  paramDef: unknown,
+): string | null {
+  if (!isObject(paramDef)) return null;
+  const type = typeof paramDef.type === "string" ? paramDef.type : "any";
+  const desc = typeof paramDef.description === "string" ? paramDef.description : "";
+
+  // Nested filter schema (set_list_filters' "filters" object property).
+  const nestedProps = isObject(paramDef.properties) ? paramDef.properties : null;
+  if (nestedProps && Object.keys(nestedProps).length > 0) {
+    const children = Object.entries(nestedProps)
+      .map(([childName, childDef]) => formatActionParamHint(childName, childDef))
+      .filter((v): v is string => Boolean(v));
+    if (children.length === 0) return null;
+    return `${paramName} (object) → { ${children.join("; ")} }`;
+  }
+
+  return desc ? `${paramName} (${type}): ${desc}` : `${paramName} (${type})`;
+}
+
+function formatActionParameters(parameters: unknown): string[] {
+  if (!isObject(parameters)) return [];
+  const entries = Object.entries(parameters).filter(
+    ([key]) => key !== "entity", // entity is just an optional guard
+  );
+  if (entries.length === 0) return [];
+  const hints: string[] = [];
+  for (const [name, def] of entries) {
+    const hint = formatActionParamHint(name, def);
+    if (hint) hints.push(hint);
+  }
+  return hints;
 }
 
 function formatPermissions(perms: unknown, actions: ActionDef[]): string[] {
@@ -703,6 +759,10 @@ function formatPermissions(perms: unknown, actions: ActionDef[]): string[] {
     lines.push("✅ ALLOWED frontend actions (only these can be called):");
     for (const a of allowedActions) {
       lines.push(`    • ${a.name} — ${a.description}`);
+      const paramHints = formatActionParameters(a.parameters);
+      for (const hint of paramHints) {
+        lines.push(`        - ${hint}`);
+      }
     }
   }
 

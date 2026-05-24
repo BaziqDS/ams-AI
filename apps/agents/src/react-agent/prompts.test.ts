@@ -85,6 +85,13 @@ test("prompt treats manual form submits as completed workflow state", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /Do not retry request_form_submit/i);
 });
 
+test("prompt treats submittedValues as the final approved form state", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /result\.submittedValues/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /authoritative final form values/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /APPROVED VALUES OVERRIDE EARLIER FILLS/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /CONSUMABLE to FIXED_ASSET/i);
+});
+
 test("prompt avoids post-create duplicate navigation", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /POST-CREATE WORKFLOW/i);
   assert.match(SYSTEM_PROMPT_TEMPLATE, /first compare LIVE PAGE STATE current route/i);
@@ -260,6 +267,37 @@ test("prompt uses the documented OpenUI prompt options without extra binding syn
   assert.match(SYSTEM_PROMPT_TEMPLATE, /Arguments are POSITIONAL/i);
   assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /Declare mutable state with `\$varName/i);
   assert.doesNotMatch(SYSTEM_PROMPT_TEMPLATE, /String concatenation: `"text" \+ \$var/i);
+});
+
+test("prompt requires every visible final response to be OpenUI", () => {
+  assert.match(
+    SYSTEM_PROMPT_TEMPLATE,
+    /Every visible final assistant message must be OpenUI/i,
+  );
+  assert.match(
+    SYSTEM_PROMPT_TEMPLATE,
+    /must start with a `root =` OpenUI entry point/i,
+  );
+  assert.match(
+    SYSTEM_PROMPT_TEMPLATE,
+    /Do not send plain text, markdown, fenced markdown, JSON, or explanatory prose/i,
+  );
+  assert.match(
+    SYSTEM_PROMPT_TEMPLATE,
+    /Even for short acknowledgements, greetings, blockers/i,
+  );
+  assert.match(
+    SYSTEM_PROMPT_TEMPLATE,
+    /still format the reply as OpenUI/i,
+  );
+  assert.doesNotMatch(
+    SYSTEM_PROMPT_TEMPLATE,
+    /Return OpenUI for visual responses/i,
+  );
+  assert.doesNotMatch(
+    SYSTEM_PROMPT_TEMPLATE,
+    /reply briefly without calling any tools\./i,
+  );
 });
 
 test("prompt continues after navigation or form-open actions with refreshed page context", () => {

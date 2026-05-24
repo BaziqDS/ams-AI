@@ -1,6 +1,6 @@
 "use client";
 
-import { Component, type ErrorInfo, type ReactNode, useEffect, useState } from "react";
+import { Component, type ErrorInfo, type ReactNode, useCallback, useEffect, useId, useState } from "react";
 import { createPortal } from "react-dom";
 import { Renderer } from "@openuidev/react-lang";
 import type { ActionEvent } from "@openuidev/react-lang";
@@ -10,6 +10,7 @@ import {
 } from "@openuidev/react-ui";
 import { amsOpenUiLibrary } from "@/lib/ams-openui";
 import { copilotBridge } from "@/lib/copilot-bridge";
+import { cn } from "@/lib/utils";
 
 function stripOpenUiFence(content: string) {
   const trimmed = content.trim();
@@ -23,6 +24,42 @@ export function getOpenUiLang(content: string) {
 
   const rootMatch = code.match(/(^|\n)(root\s*=[\s\S]*)/);
   return rootMatch?.[2]?.trim() ?? null;
+}
+
+export function isSimpleOpenUiTextContent(code: string) {
+  const lines = stripOpenUiFence(code)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  return (
+    lines.length === 1 &&
+    /^root\s*=\s*TextContent\s*\(/.test(lines[0])
+  );
+}
+
+export function extractSimpleOpenUiTextContent(code: string) {
+  const lines = stripOpenUiFence(code)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length !== 1) return null;
+
+  const completeMatch = lines[0].match(
+    /^root\s*=\s*TextContent\s*\(\s*"((?:\\.|[^"\\])*)"/,
+  );
+  const partialMatch = lines[0].match(
+    /^root\s*=\s*TextContent\s*\(\s*"((?:\\.|[^"\\])*)$/,
+  );
+  const value = completeMatch?.[1] ?? partialMatch?.[1];
+  if (value === undefined) return null;
+
+  try {
+    return JSON.parse(`"${value}"`) as string;
+  } catch {
+    return value.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  }
 }
 
 class OpenUiErrorBoundary extends Component<
@@ -53,24 +90,42 @@ export function OpenUiAssistantMessage({
   fallback,
   isStreaming,
   onAction,
+  onPreviewActionChange,
+  compactText = false,
 }: {
   code: string;
   fallback: ReactNode;
   isStreaming: boolean;
   onAction?: (event: ActionEvent) => void;
+  onPreviewActionChange?: (action: (() => void) | null) => void;
+  compactText?: boolean;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [parentPreviewOpen, setParentPreviewOpen] = useState(false);
+  const previewId = useId();
 
-  const openPreview = () => {
+  const openPreview = useCallback(() => {
     if (window.parent && window.parent !== window) {
+      setParentPreviewOpen(true);
       window.parent.postMessage(
-        { source: "ams-copilot-iframe", type: "OPEN_OPENUI_PREVIEW", code },
+        {
+          source: "ams-copilot-iframe",
+          type: "OPEN_OPENUI_PREVIEW",
+          previewId,
+          code,
+          isStreaming,
+        },
         "*",
       );
       return;
     }
     setIsExpanded(true);
-  };
+  }, [code, isStreaming, previewId]);
+
+  useEffect(() => {
+    onPreviewActionChange?.(openPreview);
+    return () => onPreviewActionChange?.(null);
+  }, [onPreviewActionChange, openPreview]);
 
   useEffect(() => {
     if (!isExpanded) return;
@@ -83,26 +138,29 @@ export function OpenUiAssistantMessage({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isExpanded]);
 
+  useEffect(() => {
+    if (!parentPreviewOpen || !window.parent || window.parent === window) return;
+
+    window.parent.postMessage(
+      {
+        source: "ams-copilot-iframe",
+        type: "UPDATE_OPENUI_PREVIEW",
+        previewId,
+        code,
+        isStreaming,
+      },
+      "*",
+    );
+  }, [code, isStreaming, parentPreviewOpen, previewId]);
+
   return (
     <OpenUiErrorBoundary fallback={fallback}>
-      <div className="openui-chat-frame">
-        <div className="openui-chat-toolbar">
-          <button
-            type="button"
-            className="openui-chat-expand"
-            onClick={openPreview}
-            aria-label="Open generated UI in larger view"
-            title="Open larger preview"
-          >
-            <span className="openui-chat-toolbar-label">Preview</span>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M15 3h6v6" />
-              <path d="M21 3l-7 7" />
-              <path d="M9 21H3v-6" />
-              <path d="M3 21l7-7" />
-            </svg>
-          </button>
-        </div>
+      <div
+        className={cn(
+          "openui-chat-frame",
+          compactText && "openui-chat-frame--text",
+        )}
+      >
         <div className="openui-chat-message">
           <ThemeProvider mode="light" lightTheme={defaultLightTheme}>
             <Renderer
@@ -125,13 +183,13 @@ export function OpenUiAssistantMessage({
             >
               <div className="openui-chat-modal-header">
                 <div className="openui-chat-modal-preview-label">
-                  <span className="openui-chat-toolbar-label">Preview</span>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M15 3h6v6" />
-                    <path d="M21 3l-7 7" />
-                    <path d="M9 21H3v-6" />
-                    <path d="M3 21l7-7" />
-                  </svg>
+                  <span>Generated UI</span>
+                  {isStreaming ? (
+                    <span className="openui-chat-modal-live" aria-label="Generating preview">
+                      <span aria-hidden="true" />
+                      Building
+                    </span>
+                  ) : null}
                 </div>
                 <button
                   type="button"

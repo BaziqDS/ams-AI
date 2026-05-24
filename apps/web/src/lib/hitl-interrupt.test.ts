@@ -68,7 +68,6 @@ test("builds production review copy for AMS form submit approval", () => {
   assert.match(copy.description, /runs against the form currently open/i);
   assert.deepEqual(copy.details, [
     "Form: inspection_detail_42_stock_details",
-    "Intent: submit",
   ]);
 });
 
@@ -181,7 +180,7 @@ test("builds approval model from live active form fields", () => {
   );
 
   assert.equal(model.recordLabel, "CTR-2026-001");
-  assert.equal(model.description, "Review the exact fields the assistant filled before approving this submit.");
+  assert.equal(model.description, "Review the filled and missing form fields before approving this submit.");
   assert.deepEqual(model.changePreview, [
     "Item 1 Central Register: DSR (1)",
     "Item 1 Central Page Number: 44",
@@ -481,4 +480,84 @@ test("adds missing required fields to the approval form", () => {
   assert.equal(model.editableFields[0].missing, false);
   assert.equal(model.editableFields[1].required, true);
   assert.equal(model.editableFields[1].missing, true);
+});
+
+test("approval fields show all currently filled form values, not only latest assistant change", () => {
+  const model = buildHitlReviewModel(
+    {
+      name: "request_form_submit",
+      args: { formId: "category-create", intent: "submit" },
+    },
+    {
+      readables: [
+        {
+          id: "active-form",
+          value: {
+            activeForm: {
+              formId: "category-create",
+              title: "Create Category",
+              fields: [
+                { name: "name", label: "Category name", type: "string", required: true },
+                { name: "code", label: "Category code", type: "string" },
+                {
+                  name: "category_type",
+                  label: "Category type",
+                  type: "select",
+                  required: true,
+                  options: [{ label: "Fixed Asset", value: "FIXED_ASSET" }],
+                },
+                { name: "tracking_type", label: "Tracking type", type: "select", required: true },
+                { name: "notes", label: "Notes", type: "string" },
+              ],
+              values: {
+                name: "Computer Accessories",
+                code: "COMP-ACC",
+                category_type: "FIXED_ASSET",
+              },
+            },
+          },
+        },
+        {
+          id: "__ams_activity_context",
+          value: {
+            recentActivity: [
+              {
+                kind: "form_values_set",
+                actor: "assistant",
+                formId: "category-create",
+                fields: ["name", "code"],
+                currentValues: {
+                  name: "Computer Accessories",
+                  code: "COMP-ACC",
+                },
+              },
+              {
+                kind: "form_values_set",
+                actor: "assistant",
+                formId: "category-create",
+                fields: ["category_type"],
+                currentValues: {
+                  category_type: "FIXED_ASSET",
+                },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  );
+
+  assert.deepEqual(model.changePreview, [
+    "Category name: Computer Accessories",
+    "Category code: COMP-ACC",
+    "Category type: Fixed Asset (FIXED_ASSET)",
+    "Tracking type: Not set",
+  ]);
+  assert.deepEqual(model.editableFields.map((field) => field.name), [
+    "name",
+    "code",
+    "category_type",
+    "tracking_type",
+  ]);
+  assert.equal(model.editableFields.at(-1)?.missing, true);
 });

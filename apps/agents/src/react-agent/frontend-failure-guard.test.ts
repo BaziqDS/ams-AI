@@ -137,10 +137,9 @@ test("stale submit tool calls stop before human approval is requested", () => {
     },
   );
 
-  assert.match(message ?? "", /request_form_submit/);
-  assert.match(message ?? "", /inspection_detail_35_central_register/);
+  assert.match(message ?? "", /^root = TextContent/);
   assert.match(message ?? "", /current page is \/stock-entries/i);
-  assert.match(message ?? "", /not ask for approval/i);
+  assert.match(message ?? "", /Open the relevant form again/i);
 });
 
 test("targetless submit tool calls stop when the user closed the form", () => {
@@ -180,10 +179,10 @@ test("targetless submit tool calls stop when the user closed the form", () => {
     },
   );
 
-  assert.match(message ?? "", /request_form_submit/);
-  assert.match(message ?? "", /no active AMS form/i);
+  assert.match(message ?? "", /^root = TextContent/);
+  assert.match(message ?? "", /nothing active to submit/i);
   assert.match(message ?? "", /New Inspection Certificate/);
-  assert.match(message ?? "", /not ask for approval/i);
+  assert.match(message ?? "", /Reopen the form/i);
 });
 
 test("repeated submit tool calls stop when the same form was already submitted", () => {
@@ -228,10 +227,10 @@ test("repeated submit tool calls stop when the same form was already submitted",
     },
   );
 
-  assert.match(message ?? "", /already submitted/i);
+  assert.match(message ?? "", /already been submitted/i);
   assert.match(message ?? "", /New Inspection Certificate/);
   assert.match(message ?? "", /record 35/i);
-  assert.match(message ?? "", /not ask for approval/i);
+  assert.match(message ?? "", /did not send another approval request/i);
 });
 
 test("successful submit is not re-blocked after the model already answered", () => {

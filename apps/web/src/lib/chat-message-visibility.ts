@@ -14,6 +14,7 @@ function contentToText(content: Message["content"]): string {
 }
 
 export function getRenderableChatMessage(message: Message): Message | null {
+  if (message.type === "system") return null;
   if (!message.id?.startsWith(DO_NOT_RENDER_ID_PREFIX)) return message;
   if (message.type !== "human") return null;
 

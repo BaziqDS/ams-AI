@@ -304,7 +304,12 @@ function normalizedOptions(field: Record<string, unknown> | undefined) {
 }
 
 function isEmptyFieldValue(value: unknown) {
-  return value === undefined || value === null || value === "";
+  return (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    (Array.isArray(value) && value.length === 0)
+  );
 }
 
 function formatDateValue(value: string) {
@@ -349,34 +354,79 @@ function liveEditableFields(
   fields: string[],
   currentValues?: unknown,
 ): HitlEditableField[] {
-  if (!activeForm || fields.length === 0) return [];
+  if (!activeForm) return [];
   const fieldsByName = fieldMap(activeForm);
   const fallbackValues = [
+    activeForm.values,
+    isObject(activeForm.lastAssistantEdit) ? activeForm.lastAssistantEdit.currentValues : undefined,
     currentValues ? expandBulkValues(currentValues, fields, fieldsByName) : undefined,
     currentValues,
-    isObject(activeForm.lastAssistantEdit) ? activeForm.lastAssistantEdit.currentValues : undefined,
-    activeForm.values,
   ];
-  const changedFieldNames = expandedFieldNames(fields, activeForm, currentValues);
+
+  const valueForField = (name: string) =>
+    fallbackValues.reduce<unknown>((resolved, source) => {
+      if (resolved !== undefined) return resolved;
+      return getNestedValue(source, name);
+    }, undefined);
+
+  const fieldValuesForArrays = fallbackValues.reduce<Record<string, unknown>>((merged, source) => {
+    if (!isObject(source)) return merged;
+    for (const field of fieldsByName.values()) {
+      if (field.type !== "array") continue;
+      const value = getNestedValue(source, field.name);
+      if (Array.isArray(value) && !Array.isArray(merged[field.name])) {
+        merged[field.name] = value;
+      }
+    }
+    return merged;
+  }, {});
+
+  const generatedArrayNames = Array.from(fieldsByName.values()).flatMap((field) => {
+    if (field.type !== "array") return [];
+    const value = fieldValuesForArrays[field.name];
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((row, index) => {
+      if (!isObject(row)) return [];
+      return Object.keys(row)
+        .filter((key) => !["id", "index"].includes(key))
+        .filter((key) => !isEmptyFieldValue(row[key]))
+        .filter((key) => ["string", "number", "boolean"].includes(typeof row[key]))
+        .map((key) => `${field.name}.${index}.${key}`);
+    });
+  });
+
+  const schemaFieldNames = Array.from(fieldsByName.values())
+    .filter((field) => field.readOnly !== true)
+    .map((field) => field.name)
+    .filter((name) => {
+      const field = fieldsByName.get(name);
+      if (field?.type === "array" && generatedArrayNames.some((child) => child.startsWith(`${name}.`))) {
+        return false;
+      }
+      return !isEmptyFieldValue(valueForField(name));
+    });
+
+  const changedFieldNames = Array.from(new Set([
+    ...schemaFieldNames,
+    ...generatedArrayNames,
+    ...expandedFieldNames(fields, activeForm, currentValues).filter((name) => {
+      const field = fieldsByName.get(name);
+      if (field?.readOnly === true) return false;
+      return !isEmptyFieldValue(valueForField(name));
+    }),
+  ]));
   const missingRequiredNames = Array.from(fieldsByName.values())
     .filter((field) => field.required === true && field.readOnly !== true)
     .map((field) => field.name)
     .filter((name) => {
       if (changedFieldNames.includes(name)) return false;
-      const value = fallbackValues.reduce<unknown>((resolved, source) => {
-        if (resolved !== undefined) return resolved;
-        return getNestedValue(source, name);
-      }, undefined);
-      return isEmptyFieldValue(value);
+      return isEmptyFieldValue(valueForField(name));
     });
 
   return [...changedFieldNames, ...missingRequiredNames].map((name) => {
     const field = fieldsByName.get(name);
     const label = typeof field?.label === "string" ? field.label : humanizeToken(name);
-    const value = fallbackValues.reduce<unknown>((resolved, source) => {
-      if (resolved !== undefined) return resolved;
-      return getNestedValue(source, name);
-    }, undefined);
+    const value = valueForField(name);
     const normalizedValue = normalizeFieldValue(value);
     const required = field?.required === true;
     const missing = required && isEmptyFieldValue(normalizedValue);
@@ -470,7 +520,7 @@ function riskForIntent(intent: string): HitlReviewModel["riskLevel"] {
 }
 
 function defaultChangePreview(action: HitlActionRequest): string[] {
-  const hiddenKeys = new Set(["approvalContext", "reviewContext", "summary"]);
+  const hiddenKeys = new Set(["approvalContext", "intent", "reviewContext", "summary"]);
   const entries = Object.entries(action.args)
     .filter(([key]) => !hiddenKeys.has(key))
     .map(([key, value]) => `${humanizeToken(key)}: ${renderArg(value)}`)
@@ -534,7 +584,7 @@ export function buildHitlReviewModel(
         : `${intent} ${noun}`,
     description:
       liveChanges.length > 0
-        ? `Review the exact fields the assistant filled before approving this ${intent.toLowerCase()}.`
+        ? `Review the filled and missing form fields before approving this ${intent.toLowerCase()}.`
         :
       typeof context?.description === "string" && context.description.trim()
         ? context.description.trim()
@@ -576,15 +626,11 @@ export function getHitlActionReviewCopy(action: HitlActionRequest): {
 } {
   if (action.name === "request_form_submit") {
     const formId = action.args.formId;
-    const intent = action.args.intent ?? "save";
     return {
       title: "Submit active AMS form",
       description:
         "Approve only after checking the visible AMS form. This runs against the form currently open in the browser using your signed-in permissions, and may create, update, submit, or advance workflow records.",
-      details: [
-        ...(formId ? [`Form: ${renderArg(formId)}`] : []),
-        `Intent: ${renderArg(intent)}`,
-      ],
+      details: formId ? [`Form: ${renderArg(formId)}`] : [],
     };
   }
 

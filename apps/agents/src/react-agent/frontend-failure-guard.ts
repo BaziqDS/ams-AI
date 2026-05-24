@@ -78,6 +78,10 @@ function submitRecordId(lastSubmit: Record<string, unknown>) {
   return unknownId(result.recordId) ?? unknownId(result.id);
 }
 
+function openUiTextMessage(text: string) {
+  return `root = TextContent(${JSON.stringify(text)})`;
+}
+
 const FRESH_FORM_EVENT_KINDS = new Set([
   "form_opened",
   "form_field_changed",
@@ -311,10 +315,9 @@ export function getStaleFormToolCallStopMessage(
           continue;
         }
         const recordId = submitRecordId(lastSubmit);
-        return (
-          `I will not call request_form_submit for ${submittedFormTitle} because that form was already submitted successfully` +
-          `${recordId ? ` for record ${recordId}` : ""}. ` +
-          "I will not ask for approval to submit it again. I should continue from the current page or open the saved record instead."
+        return openUiTextMessage(
+          `${submittedFormTitle} has already been submitted` +
+            `${recordId ? ` for record ${recordId}` : ""}. I did not send another approval request. You can continue from the current page or open the saved record to make the next change.`,
         );
       }
     }
@@ -322,11 +325,9 @@ export function getStaleFormToolCallStopMessage(
     if (!targetFormId) {
       if (toolCall.name === "request_form_submit" && !activeFormId) {
         const closedLabel = lastClosedFormLabel(lastClosed);
-        return (
-          `I will not call request_form_submit because the current page` +
-          `${currentRoute ? ` is ${currentRoute}` : ""} has no active AMS form` +
-          `${closedLabel ? `; the user closed ${closedLabel}` : ""}. ` +
-          "I will not ask for approval for a form that is no longer open."
+        return openUiTextMessage(
+          `${closedLabel ?? "The form"} is no longer open, so there is nothing active to submit` +
+            `${currentRoute ? ` on ${currentRoute}` : ""}. Reopen the form or open the saved inspection record, then ask me to submit it again.`,
         );
       }
       continue;
@@ -338,9 +339,8 @@ export function getStaleFormToolCallStopMessage(
       : currentRoute
         ? `the current page is ${currentRoute} with no active AMS form`
         : "there is no matching active AMS form in the current page context";
-    return (
-      `I will not call ${toolCall.name} for ${targetFormId} because ${currentState}. ` +
-      "That would reuse stale form context, so I will not ask for approval or run the old form action. Open the relevant form first, or ask me to navigate/open it before filling."
+    return openUiTextMessage(
+      `That form action is no longer available because ${currentState}. Open the relevant form again, or ask me to navigate to it before submitting.`,
     );
   }
 

@@ -226,6 +226,10 @@ test("page context prompt exposes manual submit continuation details", () => {
               ok: true,
               recordId: 35,
               redirectTo: "/inspections/35",
+              submittedValues: {
+                contract_no: "CTR-2026-001",
+                category_type: "FIXED_ASSET",
+              },
             },
             at: "2026-05-22T10:00:03.000Z",
           },
@@ -258,8 +262,65 @@ test("page context prompt exposes manual submit continuation details", () => {
   assert.match(prompt, /Last submit: .*OK.*New Inspection Certificate/);
   assert.match(prompt, /recordId=35/);
   assert.match(prompt, /redirectTo=\/inspections\/35/);
+  assert.match(prompt, /Last submit submitted values: .*contract_no=CTR-2026-001/);
+  assert.match(prompt, /category_type=FIXED_ASSET/);
   assert.match(prompt, /Last closed form: New Inspection Certificate/);
   assert.match(prompt, /Manual submit succeeded/);
+});
+
+test("page context prompt surfaces list filter allowed values from action parameters", () => {
+  const prompt = formatPageContextForPrompt({
+    readables: [
+      {
+        id: "__ams_runtime_context",
+        description: "Runtime",
+        value: {
+          route: { pathname: "/inspections", observed_at: "2026-05-24T00:00:00Z" },
+          user: { id: 1, username: "admin", is_superuser: true },
+        },
+      },
+      {
+        id: "__ams_permission_context",
+        description: "Permission snapshot",
+        value: {
+          user: { is_superuser: true },
+          capabilities: { canManage: ["inspections"], canFull: [], cannotManage: [] },
+        },
+      },
+    ],
+    actions: [
+      {
+        name: "set_list_filters",
+        description: "Set search/filter controls on the current inspection list page.",
+        parameters: {
+          entity: { type: "string", description: "Optional entity guard." },
+          filters: {
+            type: "object",
+            description: "Filter patch object.",
+            properties: {
+              stage: {
+                type: "string",
+                description:
+                  "Stage Allowed values: DRAFT (Draft), STOCK_DETAILS (Stock Details), CENTRAL_REGISTER (Central Register), FINANCE_REVIEW (Finance Review), COMPLETED (Completed), REJECTED (Rejected / Cancelled), all (All stages).",
+              },
+              search: {
+                type: "string",
+                description: "Search by contract number, indent number, contractor, or department.",
+              },
+            },
+          },
+        },
+        allowed: true,
+      },
+    ],
+  });
+
+  assert.match(prompt, /set_list_filters/);
+  assert.match(prompt, /Allowed values: DRAFT.*COMPLETED.*REJECTED/);
+  assert.match(prompt, /stage \(string\)/);
+  assert.match(prompt, /search \(string\)/);
+  // The "entity" guard parameter must NOT appear in the rendered hints.
+  assert.doesNotMatch(prompt, /entity \(string\)/);
 });
 
 test("page context prompt hides internal form helper actions from the agent", () => {
