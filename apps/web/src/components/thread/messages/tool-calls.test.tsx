@@ -58,6 +58,34 @@ test("todo tool cards wrap long task content inside the chat panel", async () =>
   assert.match(html, /break-all/);
 });
 
+test("deep agent task calls render as compact subagent cards", async () => {
+  const { ToolCalls } = await import("./tool-calls");
+  const html = renderToStaticMarkup(
+    <ToolCalls
+      toolCalls={[
+        {
+          id: "call_task",
+          name: "task",
+          type: "tool_call",
+          args: {
+            subagent_type: "frontend_controller",
+            description:
+              "Open the inspection form, verify live required fields, resolve department options, fill the user-provided values, and report blockers without guessing.",
+          },
+        },
+      ]}
+    />,
+  );
+
+  assert.match(html, /Subagent task/);
+  assert.match(html, /Frontend controller/);
+  assert.match(html, /AMS page action/);
+  assert.match(html, /line-clamp-3/);
+  assert.match(html, /verify live required fields/);
+  assert.doesNotMatch(html, /subagent_type/);
+  assert.doesNotMatch(html, /call_task/);
+});
+
 test("tool results stay constrained inside the chat panel", async () => {
   const { ToolResult } = await import("./tool-calls");
   const html = renderToStaticMarkup(

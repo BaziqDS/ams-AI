@@ -84,7 +84,7 @@ export function TodosPanel({
           )}
           <div className="min-w-0 flex-1 overflow-hidden">
             <div className="text-xs font-semibold text-foreground">Tasks</div>
-            <div className="truncate text-[11px] text-muted-foreground">
+            <div className="truncate text-[11px] text-muted-foreground" title={summary}>
               {current ? `Now: ${summary}` : summary}
             </div>
           </div>
@@ -120,12 +120,13 @@ export function TodosPanel({
                 )}
               >
                 <TodoIcon status={status} />
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 overflow-hidden">
                   <div
                     className={cn(
-                      "break-words break-all leading-snug",
+                      "truncate leading-snug",
                       status === "completed" && "line-through decoration-muted-foreground/60",
                     )}
+                    title={todo.content}
                   >
                     {todo.content}
                   </div>

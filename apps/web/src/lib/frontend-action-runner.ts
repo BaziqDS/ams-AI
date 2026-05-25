@@ -92,30 +92,39 @@ function getActiveFormId(pageContext: unknown) {
   return null;
 }
 
-function enrichSubmitResultWithPageState(
+function enrichActionResultWithPageState(
   interrupt: FrontendActionInterrupt,
   result: unknown,
   pageContext: unknown,
 ) {
-  if (interrupt.action.name !== "request_form_submit" || !isObject(result)) {
+  if (!isObject(result)) {
     return result;
   }
 
   const currentRoute = getCurrentRoute(pageContext);
   const activeFormId = getActiveFormId(pageContext);
-  const submittedFormId = stringArg(interrupt.action.args, ["formId", "form_id"]);
+  if (!currentRoute && activeFormId === null) {
+    return result;
+  }
+
+  const targetFormId = stringArg(interrupt.action.args, ["formId", "form_id"]);
   const redirectTo =
     typeof result.redirectTo === "string" && result.redirectTo.trim()
       ? result.redirectTo
       : undefined;
+  const isSubmit = interrupt.action.name === "request_form_submit";
 
   return {
     ...result,
     ...(currentRoute ? { currentRoute } : {}),
     activeFormId,
-    formClosed: submittedFormId ? activeFormId !== submittedFormId : activeFormId === null,
-    ...(submittedFormId ? { submittedFormId } : {}),
-    ...(currentRoute && redirectTo
+    ...(targetFormId && !isSubmit ? { targetFormId } : {}),
+    ...(targetFormId && !isSubmit ? { targetFormStillActive: activeFormId === targetFormId } : {}),
+    ...(isSubmit
+      ? { formClosed: targetFormId ? activeFormId !== targetFormId : activeFormId === null }
+      : {}),
+    ...(isSubmit && targetFormId ? { submittedFormId: targetFormId } : {}),
+    ...(isSubmit && currentRoute && redirectTo
       ? { routeMatchesRedirect: normalizeRoute(currentRoute) === normalizeRoute(redirectTo) }
       : {}),
   };
@@ -137,7 +146,7 @@ export async function runFrontendActionInterrupt(
       "Browser action finished with ready page context. Returning control to the agent...",
     );
     const pageContext = await deps.getFreshContext();
-    const resumeResult = enrichSubmitResultWithPageState(
+    const resumeResult = enrichActionResultWithPageState(
       interrupt,
       result,
       pageContext,

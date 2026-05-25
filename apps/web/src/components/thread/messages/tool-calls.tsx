@@ -20,24 +20,66 @@ type TodoToolItem = {
   status?: string;
 };
 
-function parseTodoToolArgs(args: unknown): TodoToolItem[] {
+type TaskToolArgs = {
+  subagentType?: string;
+  description?: string;
+};
+
+const TASK_AGENT_LABELS: Record<string, { label: string; helper: string }> = {
+  frontend_controller: {
+    label: "Frontend controller",
+    helper: "AMS page action",
+  },
+  sql_analyst: {
+    label: "SQL analyst",
+    helper: "AMS data analysis",
+  },
+};
+
+function parseRecordArgs(args: unknown): Record<string, unknown> {
   let parsed = args;
   if (typeof parsed === "string") {
     try {
       parsed = JSON.parse(parsed);
     } catch {
-      return [];
+      return {};
     }
   }
 
-  if (!parsed || typeof parsed !== "object") return [];
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return parsed as Record<string, unknown>;
+}
 
+function parseTodoToolArgs(args: unknown): TodoToolItem[] {
+  const parsed = parseRecordArgs(args);
   const todos = (parsed as Record<string, unknown>).todos;
   if (!Array.isArray(todos)) return [];
 
   return todos.filter(
     (todo): todo is TodoToolItem => !!todo && typeof todo === "object",
   );
+}
+
+function toTitle(value: string) {
+  return value
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function parseTaskToolArgs(args: unknown): TaskToolArgs {
+  const parsed = parseRecordArgs(args);
+  const subagentType =
+    typeof parsed.subagent_type === "string"
+      ? parsed.subagent_type
+      : typeof parsed.subagentType === "string"
+        ? parsed.subagentType
+        : undefined;
+  const description =
+    typeof parsed.description === "string" ? parsed.description : undefined;
+
+  return { subagentType, description };
 }
 
 function TodoToolIcon({ status }: { status: string }) {
@@ -93,6 +135,37 @@ function TodoToolArgs({ args }: { args: unknown }) {
   );
 }
 
+function TaskToolArgsCard({ args }: { args: unknown }) {
+  const { subagentType, description } = parseTaskToolArgs(args);
+  const metadata = subagentType
+    ? TASK_AGENT_LABELS[subagentType] ?? {
+        label: toTitle(subagentType),
+        helper: "Specialist task",
+      }
+    : { label: "Specialist agent", helper: "Delegated task" };
+
+  return (
+    <div className="min-w-0 max-w-full overflow-hidden bg-white px-3 py-2">
+      <div className="flex min-w-0 items-start gap-2">
+        <Circle className="mt-0.5 size-3.5 shrink-0 text-blue-500" />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="min-w-0 truncate text-xs font-medium text-gray-900">
+              {metadata.label}
+            </div>
+            <div className="shrink-0 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium uppercase text-blue-700">
+              {metadata.helper}
+            </div>
+          </div>
+          <div className="mt-1 line-clamp-3 max-w-full overflow-hidden break-words text-xs leading-4 text-gray-600">
+            {description?.trim() || "Working on the delegated request."}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ToolCalls({
   toolCalls,
 }: {
@@ -103,11 +176,9 @@ export function ToolCalls({
   return (
     <div className="space-y-2 w-full max-w-full min-w-0 text-xs">
       {toolCalls.map((tc, idx) => {
-        const args =
-          tc.args && typeof tc.args === "object"
-            ? (tc.args as Record<string, any>)
-            : {};
+        const args = parseRecordArgs(tc.args);
         const hasArgs = Object.keys(args).length > 0;
+        const isTaskTool = tc.name === "task";
         return (
           <div
             key={idx}
@@ -115,8 +186,8 @@ export function ToolCalls({
           >
             <div className="bg-gray-50 px-3 py-1.5 border-b border-gray-200">
               <h3 className="font-medium text-gray-900 text-xs leading-tight break-words">
-                {tc.name}
-                {tc.id && (
+                {isTaskTool ? "Subagent task" : tc.name}
+                {!isTaskTool && tc.id && (
                   <code className="ml-1 text-xs bg-gray-100 px-1.5 py-0.5 rounded break-all">
                     {tc.id}
                   </code>
@@ -125,6 +196,8 @@ export function ToolCalls({
             </div>
             {tc.name === "write_todos" ? (
               <TodoToolArgs args={args} />
+            ) : isTaskTool ? (
+              <TaskToolArgsCard args={args} />
             ) : hasArgs ? (
               <table className="w-full table-fixed divide-y divide-gray-200">
                 <tbody className="divide-y divide-gray-200">

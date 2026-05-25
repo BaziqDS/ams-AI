@@ -1,13 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowUpIcon,
   Bot,
   CalendarDays,
   Check,
   ClipboardList,
   FileText,
+  MessageSquare,
+  ShieldCheck,
   UserRound,
   X,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useStreamContext } from "@/providers/Stream";
 import { copilotBridge, type PageContext } from "@/lib/copilot-bridge";
 import {
@@ -75,6 +80,7 @@ function detailsFromPreview(preview: string[]) {
   return preview.map((line) => {
     const [label, ...rest] = line.split(": ");
     return {
+      name: label || "Field",
       label: label || "Field",
       value: rest.length ? rest.join(": ") : line,
       missing: /not set/i.test(line),
@@ -82,12 +88,91 @@ function detailsFromPreview(preview: string[]) {
   });
 }
 
+type FieldRow = {
+  name: string;
+  label: string;
+  value: string;
+  missing: boolean;
+};
+
+type FieldGroup = {
+  /** Heading text — e.g. "Top-level", "Items · row 1" */
+  title: string;
+  /** Optional secondary label like "items.0" */
+  subtitle?: string;
+  rows: FieldRow[];
+};
+
+/**
+ * Bucket flat dotted-path fields into logical groups:
+ *   - Top-level fields → "Form fields"
+ *   - items.0.foo → "Items · row 1"
+ *   - items.1.bar → "Items · row 2"
+ *   - similar for other array fields
+ */
+function groupFields(rows: FieldRow[]): FieldGroup[] {
+  // Match dotted paths like "items.0.item_name" → [arrayName, index, rest].
+  const ROW_RE = /^([A-Za-z_][A-Za-z0-9_]*)\.(\d+)\.(.+)$/;
+  const topLevel: FieldRow[] = [];
+  // Map<arrayName, Map<index, FieldRow[]>>
+  const arrays = new Map<string, Map<number, FieldRow[]>>();
+
+  for (const row of rows) {
+    const match = ROW_RE.exec(row.name);
+    if (!match) {
+      topLevel.push(row);
+      continue;
+    }
+    const arrayName = match[1];
+    const index = Number(match[2]);
+    const rest = match[3];
+    const childLabel = humanizeToken(rest.split(".").pop() || rest);
+    const childRow: FieldRow = {
+      ...row,
+      label: childLabel,
+    };
+    if (!arrays.has(arrayName)) arrays.set(arrayName, new Map());
+    const rowMap = arrays.get(arrayName)!;
+    if (!rowMap.has(index)) rowMap.set(index, []);
+    rowMap.get(index)!.push(childRow);
+  }
+
+  const groups: FieldGroup[] = [];
+  if (topLevel.length > 0) {
+    groups.push({ title: "Form fields", rows: topLevel });
+  }
+  for (const [arrayName, rowMap] of arrays.entries()) {
+    const arrayLabel = humanizeToken(arrayName);
+    const sortedIndexes = [...rowMap.keys()].sort((a, b) => a - b);
+    for (const idx of sortedIndexes) {
+      groups.push({
+        title: `${arrayLabel} · row ${idx + 1}`,
+        subtitle: `${arrayName}.${idx}`,
+        rows: rowMap.get(idx)!,
+      });
+    }
+  }
+  return groups;
+}
+
 export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
   const thread = useStreamContext();
-  const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
+  const [busy, setBusy] = useState<"approve" | "reject" | "fix" | null>(null);
   const [tab, setTab] = useState<ReviewTab>("summary");
   const [pageContext, setPageContext] = useState<PageContext | null>(null);
   const [requestedAt] = useState(() => new Date());
+  const [feedback, setFeedback] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Auto-grow the textarea to fit its content — no inner scrollbar, no
+  // arbitrary height cap. The textarea pushes the action buttons down as
+  // the user types.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [feedback]);
 
   useEffect(() => {
     let alive = true;
@@ -104,7 +189,10 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
     };
   }, [interrupt]);
 
-  const resume = async (decision: "approve" | "reject") => {
+  const resume = async (
+    decision: "approve" | "reject" | "fix",
+    feedbackMessage?: string,
+  ) => {
     if (busy || thread.isLoading) return;
     setBusy(decision);
     const freshContext = await copilotBridge.getFreshContext({
@@ -117,7 +205,11 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
         {},
         {
           command: {
-            resume: buildHitlResume(interrupt, decision),
+            resume: buildHitlResume(
+              interrupt,
+              decision,
+              decision === "fix" ? feedbackMessage : undefined,
+            ),
           },
           config: buildAgentRunConfig(freshContext),
           streamMode: ["values", "custom"],
@@ -142,100 +234,238 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
     { label: "Date", value: formatDisplayDate(requestedAt), icon: CalendarDays },
     { label: "Status", value: "Ready", icon: ClipboardList },
   ];
-  const detailRows = model.editableFields.length
-    ? model.editableFields.map((field) => ({
+
+  // Prefer the FULL current form snapshot — every non-readonly field with its
+  // current value — so the user reviews the whole form, not just the agent's
+  // most recent edits. Falls back to the agent's edits, then to the static
+  // changePreview, when the snapshot is unavailable (e.g., off-form HITL).
+  const snapshotSource =
+    model.currentFormValues.length > 0
+      ? model.currentFormValues
+      : model.editableFields;
+
+  const detailRows: FieldRow[] = snapshotSource.length
+    ? snapshotSource.map((field) => ({
+        name: field.name,
         label: field.label,
         value: field.displayValue,
         missing: field.missing,
       }))
     : detailsFromPreview(model.changePreview);
+
+  const groupedFields = useMemo(() => groupFields(detailRows), [detailRows]);
+  const totalFields = detailRows.length;
+  const missingCount = detailRows.filter((row) => row.missing).length;
+
   return (
-    <div className="box-border w-full max-w-full min-w-0 overflow-hidden rounded-lg border border-amber-200 bg-[#fffdf8] text-slate-950 shadow-sm">
-      <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 px-3 pb-2.5 pt-3 sm:px-4">
-        <div className="flex min-w-0 items-center gap-2" role="tablist" aria-label="Approval sections">
+    <div className="box-border w-full max-w-full min-w-0 overflow-hidden rounded-xl border border-blue-200/80 bg-gradient-to-b from-blue-50/60 to-white text-slate-950 shadow-sm ring-1 ring-blue-100/50">
+      {/* Header */}
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-blue-100 bg-white/60 px-3 py-2.5 sm:px-4">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-blue-100/80 text-blue-700">
+            <ShieldCheck className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <Badge
+              variant="outline"
+              className="border-blue-200 bg-blue-50/70 px-1.5 py-0 text-[10px] uppercase tracking-[0.14em] text-blue-700"
+            >
+              Approval required
+            </Badge>
+            <div className="mt-0.5 truncate text-[13px] font-semibold text-slate-950">
+              {model.title}
+            </div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1" role="tablist" aria-label="Approval sections">
           {(["summary", "fields"] as const).map((item) => (
             <button
               key={item}
               type="button"
+              role="tab"
+              aria-selected={tab === item}
               className={
-                "h-8 rounded-md border px-3 text-[13px] font-medium transition " +
+                "h-7 inline-flex items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium transition " +
                 (tab === item
-                  ? "border-amber-200 bg-amber-50 text-slate-950 shadow-sm"
-                  : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50")
+                  ? "border-slate-300 bg-slate-100 text-slate-900"
+                  : "border-transparent bg-transparent text-slate-500 hover:bg-slate-100/70 hover:text-slate-700")
               }
               onClick={() => setTab(item)}
             >
-              {item === "summary" ? "Summary" : "Fields"}
+              {item === "summary" ? (
+                "Summary"
+              ) : (
+                <>
+                  Fields
+                  {totalFields ? (
+                    <Badge
+                      variant="secondary"
+                      className="h-4 min-w-4 px-1 text-[10px] font-semibold"
+                    >
+                      {totalFields}
+                    </Badge>
+                  ) : null}
+                </>
+              )}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="px-3 pb-3 sm:px-4">
-        <div className="mb-3">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-cyan-700">
-            Assigned to agent
-          </div>
-          <h3 className="mt-1 truncate text-lg font-semibold tracking-normal text-slate-950">
-            {model.title}
-          </h3>
-          <p className="mt-1.5 max-w-3xl text-[13px] leading-5 text-slate-600">
+      {/* Body */}
+      <div className="px-3 pb-3 pt-3 sm:px-4">
+        {model.description ? (
+          <p className="mb-3 max-w-3xl text-[13px] leading-5 text-slate-600">
             {model.description}
           </p>
-        </div>
+        ) : null}
 
         {tab === "summary" ? (
-          <div className="grid min-w-0 grid-cols-1 gap-x-10 md:grid-cols-2">
+          <div className="grid min-w-0 grid-cols-1 gap-x-8 gap-y-1 md:grid-cols-2">
             {metadata.map(({ label, value, icon: Icon }) => (
               <div
                 key={label}
-                className="grid min-h-9 min-w-0 grid-cols-[20px_minmax(88px,0.45fr)_minmax(0,1fr)] items-center gap-2 border-b border-slate-200/80 text-[13px]"
+                className="grid min-h-9 min-w-0 grid-cols-[18px_minmax(88px,0.45fr)_minmax(0,1fr)] items-center gap-2 border-b border-slate-100 text-[13px] last:border-b-0"
               >
-                <Icon className="size-4 text-slate-700" />
+                <Icon className="size-4 text-blue-600" />
                 <span className="font-medium text-slate-500">{label}</span>
-                <span className="truncate font-medium text-slate-950">{value}</span>
+                <span className="truncate font-medium text-slate-950" title={value}>
+                  {value}
+                </span>
               </div>
             ))}
+            {totalFields > 0 ? (
+              <div className="col-span-full mt-2 flex flex-wrap items-center gap-2">
+                <Badge variant="secondary">
+                  {totalFields} field{totalFields === 1 ? "" : "s"} to apply
+                </Badge>
+                {missingCount > 0 ? (
+                  <Badge variant="destructive">
+                    {missingCount} still missing
+                  </Badge>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
 
         {tab === "fields" ? (
-          <div className="grid min-w-0 grid-cols-1">
-            {detailRows.slice(0, 12).map((row) => (
-              <div
-                key={`${row.label}:${row.value}`}
-                className="grid min-h-9 min-w-0 grid-cols-[minmax(112px,0.38fr)_minmax(0,1fr)] items-center gap-2 border-b border-slate-200/80 text-[13px]"
-              >
-                <span className="font-medium text-slate-500">{row.label}</span>
-                <span className={`truncate font-medium ${row.missing ? "text-red-600" : "text-slate-950"}`}>
-                  {row.missing ? "Not filled" : row.value}
-                </span>
+          <div className="max-h-72 min-w-0 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-[5px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-blue-200/80 [&::-webkit-scrollbar-track]:bg-transparent">
+            {groupedFields.length === 0 ? (
+              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50/60 px-3 py-4 text-center text-[12px] text-slate-500">
+                No field changes captured — the agent will rely on the values already in the form.
               </div>
-            ))}
+            ) : (
+              groupedFields.map((group, groupIdx) => (
+                <section
+                  key={`${group.title}-${groupIdx}`}
+                  className="mb-3 overflow-hidden rounded-lg border border-blue-100/80 bg-white last:mb-0"
+                >
+                  <header className="flex items-baseline justify-between border-b border-blue-100/70 bg-blue-50/40 px-2.5 py-1.5">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-blue-700">
+                      {group.title}
+                    </span>
+                    {group.subtitle ? (
+                      <span className="font-mono text-[10px] text-slate-400">
+                        {group.subtitle}
+                      </span>
+                    ) : null}
+                  </header>
+                  <div className="grid min-w-0 grid-cols-1">
+                    {group.rows.map((row) => (
+                      <div
+                        key={`${row.name}:${row.value}`}
+                        className="grid min-h-9 min-w-0 grid-cols-[minmax(112px,0.38fr)_minmax(0,1fr)] items-center gap-2 border-b border-slate-100 px-2.5 text-[13px] last:border-b-0"
+                      >
+                        <span
+                          className="truncate font-medium text-slate-500"
+                          title={row.label}
+                        >
+                          {row.label}
+                        </span>
+                        <span
+                          className={
+                            "truncate font-medium " +
+                            (row.missing ? "text-red-600" : "text-slate-900")
+                          }
+                          title={row.missing ? "Not filled" : row.value}
+                        >
+                          {row.missing ? "Not filled" : row.value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))
+            )}
           </div>
         ) : null}
       </div>
 
-      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200/80 bg-white/70 px-3 py-3 sm:px-4">
-        <div className="flex flex-wrap justify-end gap-2">
-          <button
-            type="button"
-            className="inline-flex h-8 min-w-20 items-center justify-center gap-1.5 rounded-md border border-red-600 bg-red-600 px-3 text-[13px] font-semibold text-white transition hover:border-red-700 hover:bg-red-700 disabled:opacity-60"
-            onClick={() => resume("reject")}
-            disabled={Boolean(busy) || thread.isLoading}
-          >
-            <X className="size-3.5" />
-            {busy === "reject" ? "Rejecting..." : "Reject"}
-          </button>
-          <button
-            type="button"
-            className="inline-flex h-8 min-w-24 items-center justify-center gap-1.5 rounded-md border border-slate-950 bg-slate-950 px-3 text-[13px] font-semibold text-white transition hover:border-slate-800 hover:bg-slate-800 disabled:opacity-60"
-            onClick={() => resume("approve")}
-            disabled={Boolean(busy) || thread.isLoading}
-          >
-            <Check className="size-3.5" />
-            {busy === "approve" ? "Approving..." : model.approveLabel}
-          </button>
+      {/* Footer: feedback input + action buttons */}
+      <div className="border-t border-blue-100 bg-white/70 px-3 py-2.5 sm:px-4">
+        {/* Inline feedback textarea — lets the user redirect the agent without
+            leaving the card. Empty → Approve. Non-empty → Send fix. */}
+        <div className="mb-2 rounded-md border border-slate-200 bg-white focus-within:border-slate-400 focus-within:ring-1 focus-within:ring-slate-200">
+          <label className="flex items-start gap-2 px-2.5 py-1.5">
+            <MessageSquare className="mt-0.5 size-3.5 shrink-0 text-slate-400" />
+            <textarea
+              ref={textareaRef}
+              value={feedback}
+              onChange={(event) => setFeedback(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && feedback.trim()) {
+                  event.preventDefault();
+                  void resume("fix", feedback.trim());
+                }
+              }}
+              placeholder="Tell the agent what to fix — sending will reject this approval and let the agent correct it."
+              rows={1}
+              className="w-full resize-none overflow-hidden border-0 bg-transparent text-[12px] leading-5 text-slate-800 placeholder:text-slate-400 focus:outline-none"
+              style={{ minHeight: 20 }}
+              disabled={Boolean(busy) || thread.isLoading}
+            />
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {feedback.trim() ? (
+            /* Typing → only the Send icon button. Approve and Reject are
+               hidden because typing feedback already implies rejecting the
+               current approval. */
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label="Send feedback to agent"
+              title="Reject this approval and send your message — the agent will correct the form and request approval again."
+              onClick={() => resume("fix", feedback.trim())}
+              disabled={Boolean(busy) || thread.isLoading}
+              className="size-8 p-0"
+            >
+              <ArrowUpIcon />
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => resume("reject")}
+                disabled={Boolean(busy) || thread.isLoading}
+              >
+                <X />
+                {busy === "reject" ? "Rejecting…" : "Reject"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => resume("approve")}
+                disabled={Boolean(busy) || thread.isLoading}
+              >
+                <Check />
+                {busy === "approve" ? "Approving…" : "Approve"}
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </div>

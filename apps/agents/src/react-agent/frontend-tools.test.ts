@@ -506,7 +506,7 @@ test("formats empty option failures with create guidance", () => {
 
   assert.match(message, /EMPTY_OPTIONS/);
   assert.match(message, /do not guess an ID/i);
-  assert.match(message, /offer to help create/i);
+  assert.match(message, /suggest the relevant create form/i);
 });
 
 test("formats requested option not found separately from empty option lists", () => {
@@ -528,7 +528,7 @@ test("formats requested option not found separately from empty option lists", ()
   assert.match(message, /department/);
   assert.match(message, /BCIT/);
   assert.match(message, /not available/i);
-  assert.match(message, /Present the available alternatives/i);
+  assert.match(message, /Report the available alternatives to the orchestrator/i);
   assert.doesNotMatch(message, /EMPTY_OPTIONS/);
   assert.doesNotMatch(message, /no available options/i);
   assert.doesNotMatch(message, /Raw result/i);

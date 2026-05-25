@@ -78,10 +78,6 @@ function submitRecordId(lastSubmit: Record<string, unknown>) {
   return unknownId(result.recordId) ?? unknownId(result.id);
 }
 
-function openUiTextMessage(text: string) {
-  return `root = TextContent(${JSON.stringify(text)})`;
-}
-
 const FRESH_FORM_EVENT_KINDS = new Set([
   "form_opened",
   "form_field_changed",
@@ -315,9 +311,9 @@ export function getStaleFormToolCallStopMessage(
           continue;
         }
         const recordId = submitRecordId(lastSubmit);
-        return openUiTextMessage(
+        return (
           `${submittedFormTitle} has already been submitted` +
-            `${recordId ? ` for record ${recordId}` : ""}. I did not send another approval request. You can continue from the current page or open the saved record to make the next change.`,
+          `${recordId ? ` for record ${recordId}` : ""}. I did not send another approval request. You can continue from the current page or open the saved record to make the next change.`
         );
       }
     }
@@ -325,9 +321,9 @@ export function getStaleFormToolCallStopMessage(
     if (!targetFormId) {
       if (toolCall.name === "request_form_submit" && !activeFormId) {
         const closedLabel = lastClosedFormLabel(lastClosed);
-        return openUiTextMessage(
+        return (
           `${closedLabel ?? "The form"} is no longer open, so there is nothing active to submit` +
-            `${currentRoute ? ` on ${currentRoute}` : ""}. Reopen the form or open the saved inspection record, then ask me to submit it again.`,
+          `${currentRoute ? ` on ${currentRoute}` : ""}. Reopen the form or open the saved inspection record, then ask me to submit it again.`
         );
       }
       continue;
@@ -339,9 +335,7 @@ export function getStaleFormToolCallStopMessage(
       : currentRoute
         ? `the current page is ${currentRoute} with no active AMS form`
         : "there is no matching active AMS form in the current page context";
-    return openUiTextMessage(
-      `That form action is no longer available because ${currentState}. Open the relevant form again, or ask me to navigate to it before submitting.`,
-    );
+    return `That form action is no longer available because ${currentState}. Open the relevant form again, or ask me to navigate to it before submitting.`;
   }
 
   return null;

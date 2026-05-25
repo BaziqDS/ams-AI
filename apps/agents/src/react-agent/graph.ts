@@ -1,10 +1,9 @@
 import { ChatOpenAI } from "@langchain/openai";
+import { createDeepAgent, registerHarnessProfile } from "deepagents";
 import {
   contextEditingMiddleware,
-  createAgent,
   modelRetryMiddleware,
   toolCallLimitMiddleware,
-  todoListMiddleware,
 } from "langchain";
 
 import { frontendFailureGuardMiddleware } from "./frontend-failure-guard.js";
@@ -12,12 +11,32 @@ import {
   buildGroqChatModelConfig,
   buildOpenRouterChatModelConfig,
 } from "./model-config.js";
+import { openUiGeneratedPromptMiddleware } from "./openui-generated-prompt-middleware.js";
 import { pageContextMiddleware } from "./page-context-middleware.js";
-import { SYSTEM_PROMPT_TEMPLATE } from "./prompts.js";
+import {
+  FRONTEND_CONTROLLER_PROMPT_TEMPLATE,
+  ORCHESTRATOR_PROMPT_TEMPLATE,
+  SQL_ANALYST_PROMPT_TEMPLATE,
+} from "./prompts.js";
 import { buildModelRetryMiddlewareConfig } from "./resilience.js";
-import { TOOLS } from "./tools.js";
+import { createSqlAnalystTools } from "./sql-tools.js";
+import {
+  FRONTEND_CONTROLLER_TOOLS,
+  ORCHESTRATOR_TOOLS,
+} from "./tools.js";
 
 const DEFAULT_TOOL_CALL_RUN_LIMIT = 70;
+const DEEPAGENTS_BASE_PROMPT_OVERRIDE =
+  "DeepAgents runtime is active. Follow the role-specific AMS system prompt exactly for response format, delegation, and user-visible output.";
+const DISABLED_FILESYSTEM_TOOLS = [
+  "ls",
+  "read_file",
+  "write_file",
+  "edit_file",
+  "glob",
+  "grep",
+  "execute",
+];
 
 function configuredPositiveInt(value: string | undefined, fallback: number) {
   const parsed = Number(value);
@@ -45,27 +64,102 @@ function createAgentModel() {
     : createOpenRouterModel();
 }
 
-const agent = createAgent({
-  model: createAgentModel(),
-  tools: TOOLS,
-  middleware: [
+function runtimePrompt(prompt: string) {
+  return prompt.replace("{system_time}", new Date().toISOString());
+}
+
+function createRuntimeMiddleware({
+  includeFrontendGuard,
+  includeOpenUiGeneratedPrompt,
+  includePageContext,
+  runLimit,
+}: {
+  includeFrontendGuard: boolean;
+  includeOpenUiGeneratedPrompt: boolean;
+  includePageContext: boolean;
+  runLimit: number;
+}) {
+  return [
     modelRetryMiddleware(buildModelRetryMiddlewareConfig()),
-    pageContextMiddleware,
+    ...(includePageContext ? [pageContextMiddleware] : []),
     toolCallLimitMiddleware({
-      runLimit: configuredPositiveInt(
-        process.env.AGENT_TOOL_CALL_RUN_LIMIT,
-        DEFAULT_TOOL_CALL_RUN_LIMIT,
-      ),
+      runLimit,
       exitBehavior: "end",
     }),
-    todoListMiddleware(),
-    frontendFailureGuardMiddleware,
+    ...(includeFrontendGuard ? [frontendFailureGuardMiddleware] : []),
     contextEditingMiddleware(),
+    ...(includeOpenUiGeneratedPrompt
+      ? [openUiGeneratedPromptMiddleware]
+      : []),
+  ];
+}
+
+registerHarnessProfile("openai", {
+  baseSystemPrompt: DEEPAGENTS_BASE_PROMPT_OVERRIDE,
+  excludedTools: DISABLED_FILESYSTEM_TOOLS,
+  generalPurposeSubagent: { enabled: false },
+});
+
+registerHarnessProfile("openrouter", {
+  baseSystemPrompt: DEEPAGENTS_BASE_PROMPT_OVERRIDE,
+  excludedTools: DISABLED_FILESYSTEM_TOOLS,
+  generalPurposeSubagent: { enabled: false },
+});
+
+registerHarnessProfile("groq", {
+  baseSystemPrompt: DEEPAGENTS_BASE_PROMPT_OVERRIDE,
+  excludedTools: DISABLED_FILESYSTEM_TOOLS,
+  generalPurposeSubagent: { enabled: false },
+});
+
+const toolCallRunLimit = configuredPositiveInt(
+  process.env.AGENT_TOOL_CALL_RUN_LIMIT,
+  DEFAULT_TOOL_CALL_RUN_LIMIT,
+);
+const model = createAgentModel();
+const sqlAnalystTools = await createSqlAnalystTools(model);
+
+const agent = createDeepAgent({
+  name: "ams_copilot_orchestrator",
+  model,
+  tools: ORCHESTRATOR_TOOLS,
+  subagents: [
+    {
+      name: "frontend_controller",
+      description:
+        "Use for AMS page reads, navigation, form filling, option resolution, frontend actions, and human-approved submit workflows.",
+      systemPrompt: runtimePrompt(FRONTEND_CONTROLLER_PROMPT_TEMPLATE),
+      model,
+      tools: FRONTEND_CONTROLLER_TOOLS,
+      middleware: createRuntimeMiddleware({
+        includeFrontendGuard: true,
+        includeOpenUiGeneratedPrompt: false,
+        includePageContext: true,
+        runLimit: toolCallRunLimit,
+      }),
+    },
+    {
+      name: "sql_analyst",
+      description:
+        "Use for complex AMS reporting, schema inspection, and SQL execution against the configured AMS database.",
+      systemPrompt: SQL_ANALYST_PROMPT_TEMPLATE,
+      model,
+      tools: sqlAnalystTools,
+      middleware: createRuntimeMiddleware({
+        includeFrontendGuard: false,
+        includeOpenUiGeneratedPrompt: false,
+        includePageContext: false,
+        runLimit: Math.min(toolCallRunLimit, 20),
+      }),
+    },
   ],
-  systemPrompt: SYSTEM_PROMPT_TEMPLATE.replace(
-    "{system_time}",
-    new Date().toISOString(),
-  ),
+  middleware: createRuntimeMiddleware({
+    includeFrontendGuard: false,
+    includeOpenUiGeneratedPrompt: true,
+    includePageContext: true,
+    runLimit: toolCallRunLimit,
+  }),
+  systemPrompt: runtimePrompt(ORCHESTRATOR_PROMPT_TEMPLATE),
 });
 
 export const graph = agent.graph;

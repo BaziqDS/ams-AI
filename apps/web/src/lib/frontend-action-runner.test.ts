@@ -105,6 +105,62 @@ test("frontend action runner resumes with the fresh context provided after the f
       .config?.configurable?.pageContext,
     pageContext,
   );
+  assert.deepEqual(
+    (submitCalls[0] as Array<{ command?: { resume?: { result?: Record<string, unknown> } } }>)[1]
+      .command?.resume?.result,
+    {
+      ok: true,
+      contextReady: true,
+      contextSummary: { route: "/inspections/13" },
+      currentRoute: "/inspections/13",
+      activeFormId: null,
+    },
+  );
+});
+
+test("frontend action runner annotates form action results with current route and active form", async () => {
+  const submitCalls: unknown[] = [];
+  const pageContext = {
+    readables: [
+      { id: "__ams_runtime_context", value: { route: "/inspections" } },
+      {
+        id: "inspection-create-form",
+        value: {
+          activeForm: { formId: "inspection_create", title: "New Inspection Certificate" },
+        },
+      },
+    ],
+    actions: [],
+  };
+
+  const interrupt: FrontendActionInterrupt = {
+    type: "frontend_action_request",
+    action: {
+      name: "set_form_values",
+      args: { formId: "inspection_create", values: { contract_no: "CTR-1" } },
+    },
+  };
+
+  await runFrontendActionInterrupt(interrupt, {
+    callAction: async () => ({ ok: true, applied: ["contract_no"] }),
+    getFreshContext: async () => pageContext,
+    submit: (...args: unknown[]) => {
+      submitCalls.push(args);
+    },
+  });
+
+  const resume = (submitCalls[0] as Array<{
+    command?: { resume?: { result?: Record<string, unknown> } };
+  }>)[1].command?.resume;
+
+  assert.deepEqual(resume?.result, {
+    ok: true,
+    applied: ["contract_no"],
+    currentRoute: "/inspections",
+    activeFormId: "inspection_create",
+    targetFormId: "inspection_create",
+    targetFormStillActive: true,
+  });
 });
 
 test("frontend action runner annotates submit results with current page state", async () => {

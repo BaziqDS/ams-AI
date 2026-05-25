@@ -618,9 +618,10 @@ test("page context hides top-level fields with unresolved dependencies", () => {
   assert.doesNotMatch(prompt, /to_location; type=select/);
   assert.doesNotMatch(prompt, /items; type=array/);
 
-  assert.match(prompt, /Deferred fields/);
-  assert.match(prompt, /to_location \(needs entry_type, issue_target, from_location\)/);
-  assert.match(prompt, /items \(needs from_location\)/);
+  assert.match(prompt, /Required but DEFERRED/);
+  assert.match(prompt, /to_location \(after: entry_type, issue_target, from_location\)/);
+  assert.match(prompt, /Optional deferred fields/);
+  assert.match(prompt, /items \(after: from_location\)/);
 });
 
 test("page context shows all fields when dependencies are resolved (empty missingDependencies)", () => {

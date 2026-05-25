@@ -527,17 +527,59 @@ function numberField(value: Record<string, unknown>, key: string): number | unde
   return typeof field === "number" && Number.isFinite(field) ? field : undefined;
 }
 
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 function summarizeOptionCandidates(value: unknown): string | undefined {
   if (!Array.isArray(value) || value.length === 0) return undefined;
-  const labels = value
-    .slice(0, 5)
+
+  const lines = value
+    .slice(0, 6)
     .map((candidate) => {
       if (!isObject(candidate)) return String(candidate);
-      const label = candidate.label ?? candidate.value;
-      return String(label ?? "");
+
+      const label = candidate.label ?? candidate.name ?? candidate.value;
+      const id = candidate.value ?? candidate.id;
+      const code = stringField(candidate, "code") ?? stringField(candidate, "register_number");
+      const categoryType = stringField(candidate, "category_type");
+      const trackingType = stringField(candidate, "tracking_type");
+      const categoryDisplay = stringField(candidate, "category_display") ?? stringField(candidate, "category_path");
+      const description = stringField(candidate, "description");
+      const specifications = stringField(candidate, "specifications");
+      const acctUnit = stringField(candidate, "acct_unit");
+
+      const meta: string[] = [];
+      if (code) meta.push(`code=${code}`);
+      if (categoryDisplay) meta.push(`category=${categoryDisplay}`);
+      else if (categoryType) meta.push(`category_type=${categoryType}`);
+      if (trackingType) meta.push(`tracking=${trackingType}`);
+      if (acctUnit) meta.push(`unit=${acctUnit}`);
+      if (description) meta.push(`desc="${truncate(description, 80)}"`);
+      if (specifications) meta.push(`specs="${truncate(specifications, 80)}"`);
+
+      // Hybrid retrieval signals (only present when the backend's
+      // copilot-search endpoint produced this candidate). Surface them so
+      // the agent's CENTRAL REGISTER ITEM LINKING procedure can use them:
+      //   semantic_rank=1, bm25_rank=25 → "different name, same product"
+      //   tracking_match                → hard filter satisfied
+      //   category_match                → soft alignment
+      const signals = candidate.signals;
+      if (Array.isArray(signals) && signals.length > 0) {
+        const rendered = signals
+          .map((s) => String(s))
+          .filter(Boolean)
+          .slice(0, 6)
+          .join(", ");
+        if (rendered) meta.push(`signals=[${rendered}]`);
+      }
+
+      const head = `${String(label ?? "")}=${String(id ?? "")}`;
+      return meta.length > 0 ? `${head} {${meta.join(", ")}}` : head;
     })
     .filter(Boolean);
-  return labels.length > 0 ? labels.join(", ") : undefined;
+
+  return lines.length > 0 ? lines.join(" | ") : undefined;
 }
 
 export function formatFrontendActionResult(
@@ -636,13 +678,13 @@ export function formatFrontendActionResult(
         ? `REGISTER_OPTION_QUERY_MISMATCH: ${field} register fields use register numbers/codes, not item-name options. Query${query ? ` "${query}"` : ""} did not match any register identifier, but ${totalCount} register option(s) exist. Resolve and set ${field.replace(/\.(?:stock_register|central_register)$/, ".item")} and required parent fields first if needed, then search ${field} by register number/code or use an empty query to list available registers. Do not ask the user to create the item just because the register query used an item name.`
         : undefined,
       isEmptyOptionResult
-        ? `EMPTY_OPTIONS: the active form has no available options${field ? ` for ${field}` : ""}. Do not guess an ID or bypass the form. Tell the user this option does not exist yet, and offer to help create it — use OpenUI with a Button to navigate to the relevant create form (e.g., location_create, category_create, item_create). Check module manifest and permissions to determine which create form to offer.`
+        ? `EMPTY_OPTIONS: the active form has no available options${field ? ` for ${field}` : ""}. Do not guess an ID or bypass the form. Report that this option does not exist yet, and suggest the relevant create form (e.g., location_create, category_create, item_create) if the module manifest and permissions allow it.`
         : undefined,
       isOptionNotFoundResult && !isInstanceOptionQueryMismatch && !isBatchOptionQueryMismatch && !isRegisterOptionQueryMismatch
-        ? `OPTION_NOT_FOUND: requested option${query ? ` "${query}"` : ""} is not available${field ? ` for ${field}` : ""}.${candidateSummary ? ` Available alternatives: ${candidateSummary}.` : ""}${typeof totalCount === "number" ? ` (${totalCount} option(s) exist)` : ""} Do not guess an ID or silently substitute a default. Present the available alternatives to the user using OpenUI (Buttons or a compact list). Also offer to create${query ? ` "${query}"` : " the missing option"} if the user has the required capability — use a Button that navigates to the relevant create form.`
+        ? `OPTION_NOT_FOUND: requested option${query ? ` "${query}"` : ""} is not available${field ? ` for ${field}` : ""}.${candidateSummary ? ` Available alternatives: ${candidateSummary}.` : ""}${typeof totalCount === "number" ? ` (${totalCount} option(s) exist)` : ""} Do not guess an ID or silently substitute a default. Report the available alternatives to the orchestrator. Also suggest creating${query ? ` "${query}"` : " the missing option"} if the user has the required capability and a relevant create form exists.`
         : undefined,
       isAmbiguousOptionResult
-        ? `AMBIGUOUS_FORM_OPTIONS: query${query ? ` "${query}"` : ""} matched multiple options${field ? ` for ${field}` : ""}.${candidateSummary ? ` Candidates: ${candidateSummary}.` : ""} Present these candidates to the user using OpenUI Buttons so they can pick the right one. Do not guess which one to use.`
+        ? `AMBIGUOUS_FORM_OPTIONS: query${query ? ` "${query}"` : ""} matched multiple options${field ? ` for ${field}` : ""}.${candidateSummary ? ` Candidates: ${candidateSummary}.` : ""} Report these candidates to the orchestrator so the user can pick the right one. Do not guess which one to use.`
         : undefined,
       isMissingOptionDependenciesResult
         ? `OPTION_DEPENDENCIES_MISSING: cannot search${field ? ` ${field}` : " this field"} yet.${missingDependencies.length > 0 ? ` Fill these first: ${renderResult(missingDependencies)}.` : ""} Fill the dependency field(s) using set_form_values, then retry the search.`
@@ -722,6 +764,7 @@ export const setFormValues = tool(
       "Patch fields in the active browser form. Use this when the active form is open, the target formId matches the current page context, and you have exact writable field names from activeForm.setValuesSchema. " +
       "Use this for live form filling instead of rendering a chat form, and include only fields you intend to change. " +
       "For select/dropdown/foreign-key fields, use search_form_options first whenever the user explicitly named the desired option or the field options are truncated, remote, dependency-based, or resolver-backed. " +
+      "To CLEAR a field (e.g., correcting a wrong value or swapping two dependency-coupled fields), pass null as the value — this is the only allowed empty value. When clearing a parent field, also clear all dependent child fields in the same call, otherwise stale dependent values block the next set/submit. " +
       "Do not use this to guess IDs, send display labels into select fields, rely on default/current/auto-selected values as substitutes for user-requested options, bypass missing options, submit forms, open forms, or patch stale forms from another page. " +
       'The tool args must be a single JSON object with a "values" object. Never pass an array directly as values; for row arrays use values.items = [...].',
     schema: setFormValuesArgsSchema,

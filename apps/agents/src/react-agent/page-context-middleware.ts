@@ -503,16 +503,131 @@ function formatRuntime(runtime: unknown): string[] {
   return lines;
 }
 
-function formatDeferredFieldsSummary(fields: unknown[]): string | null {
-  const deferred: string[] = [];
+function isEmptyFieldValue(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string") return value.trim().length === 0;
+  if (Array.isArray(value)) return value.length === 0;
+  // Foreign-key fields sometimes arrive as { value, label } — treat empty `value` as empty.
+  if (isObject(value) && "value" in value) {
+    return isEmptyFieldValue(value.value);
+  }
+  return false;
+}
+
+type RequiredFieldSummary = {
+  /** Required, currently visible (no unresolved dependencies). */
+  active: string[];
+  /** Required, but hidden until dependencies are filled. */
+  deferred: { name: string; missing: string[] }[];
+  /** Non-required fields that are also currently deferred (informational). */
+  deferredOptional: { name: string; missing: string[] }[];
+  /** Per-row required fields inside array fields. */
+  arrayItemRequired: { arrayName: string; itemFields: string[] }[];
+};
+
+function collectRequiredFieldSummary(fields: unknown[]): RequiredFieldSummary {
+  const summary: RequiredFieldSummary = {
+    active: [],
+    deferred: [],
+    deferredOptional: [],
+    arrayItemRequired: [],
+  };
+
   for (const f of fields) {
     if (!isObject(f) || typeof f.name !== "string") continue;
-    if (!hasPendingDependencies(f)) continue;
-    const deps = (f.missingDependencies as unknown[]).map(String).join(", ");
-    deferred.push(`${f.name} (needs ${deps})`);
+    if (f.readOnly === true) continue;
+
+    const isPending = hasPendingDependencies(f);
+    const missingDeps = isPending
+      ? (f.missingDependencies as unknown[]).map(String)
+      : [];
+
+    if (f.required === true) {
+      if (isPending) {
+        summary.deferred.push({ name: f.name, missing: missingDeps });
+      } else {
+        summary.active.push(f.name);
+      }
+    } else if (isPending) {
+      summary.deferredOptional.push({ name: f.name, missing: missingDeps });
+    }
+
+    if (Array.isArray(f.arrayItemFields) && f.arrayItemFields.length > 0) {
+      const requiredItemFields = f.arrayItemFields
+        .filter(
+          (item): item is Record<string, unknown> =>
+            isObject(item) &&
+            typeof item.name === "string" &&
+            item.required === true &&
+            item.readOnly !== true,
+        )
+        .map((item) => String(item.name));
+      if (requiredItemFields.length > 0) {
+        summary.arrayItemRequired.push({
+          arrayName: f.name,
+          itemFields: requiredItemFields,
+        });
+      }
+    }
   }
-  if (deferred.length === 0) return null;
-  return `Deferred fields (hidden — fill their dependencies first, they appear on the next turn): ${deferred.join("; ")}`;
+
+  return summary;
+}
+
+function formatRequiredFieldsBlock(
+  summary: RequiredFieldSummary,
+  currentValues: unknown,
+): string[] {
+  const { active, deferred, deferredOptional, arrayItemRequired } = summary;
+  const hasAnything =
+    active.length > 0 ||
+    deferred.length > 0 ||
+    deferredOptional.length > 0 ||
+    arrayItemRequired.length > 0;
+  if (!hasAnything) return [];
+
+  const valuesObj = isObject(currentValues) ? currentValues : null;
+  const missing = valuesObj
+    ? active.filter((name) => isEmptyFieldValue(valuesObj[name]))
+    : [...active];
+
+  const lines: string[] = ["<required_fields>"];
+
+  if (active.length > 0) {
+    lines.push(`- Required now: ${active.join(", ")}`);
+    if (missing.length > 0) {
+      lines.push(`- ❌ STILL MISSING — fill before request_form_submit: ${missing.join(", ")}`);
+    } else {
+      lines.push("- ✅ All visible required fields appear filled.");
+    }
+  }
+
+  if (deferred.length > 0) {
+    const rendered = deferred
+      .map(({ name, missing: deps }) => `${name} (after: ${deps.join(", ")})`)
+      .join("; ");
+    lines.push(`- Required but DEFERRED (hidden until dependencies are set): ${rendered}`);
+  }
+
+  if (deferredOptional.length > 0) {
+    const rendered = deferredOptional
+      .map(({ name, missing: deps }) => `${name} (after: ${deps.join(", ")})`)
+      .join("; ");
+    lines.push(`- Optional deferred fields (informational): ${rendered}`);
+  }
+
+  if (arrayItemRequired.length > 0) {
+    const rendered = arrayItemRequired
+      .map(({ arrayName, itemFields }) => `${arrayName}[*].{${itemFields.join(", ")}}`)
+      .join("; ");
+    lines.push(`- Required per row inside array fields: ${rendered}`);
+  }
+
+  lines.push(
+    "Rule: do NOT call request_form_submit while any required value is missing — ask the user for it, or resolve it via search_form_options first.",
+  );
+  lines.push("</required_fields>");
+  return lines;
 }
 
 function formatActiveForm(formReadables: unknown[]): string[] {
@@ -544,6 +659,17 @@ function formatActiveForm(formReadables: unknown[]): string[] {
       lines.push("");
     }
     if (Array.isArray(activeForm.fields) && activeForm.fields.length > 0) {
+      const requiredSummary = collectRequiredFieldSummary(
+        activeForm.fields as unknown[],
+      );
+      const requiredBlock = formatRequiredFieldsBlock(
+        requiredSummary,
+        activeForm.values,
+      );
+      if (requiredBlock.length > 0) {
+        lines.push(...requiredBlock);
+      }
+
       lines.push("<writable_fields>");
       lines.push("Writable field schema (ONLY these exact names are fillable with set_form_values):");
       activeForm.fields
@@ -553,10 +679,6 @@ function formatActiveForm(formReadables: unknown[]): string[] {
         .forEach((field) => lines.push(`  - ${field}`));
       if (activeForm.fields.length > 40) {
         lines.push(`  - ... ${activeForm.fields.length - 40} more writable fields not shown`);
-      }
-      const deferredSummary = formatDeferredFieldsSummary(activeForm.fields as unknown[]);
-      if (deferredSummary) {
-        lines.push(`  ${deferredSummary}`);
       }
       lines.push("</writable_fields>");
     } else {
@@ -737,14 +859,47 @@ function formatPermissions(perms: unknown, actions: ActionDef[]): string[] {
 
   const capabilities = isObject(perms.capabilities) ? perms.capabilities : null;
   if (capabilities) {
+    const canView = Array.isArray(capabilities.canView) ? capabilities.canView : [];
     const canManage = Array.isArray(capabilities.canManage) ? capabilities.canManage : [];
     const canFull = Array.isArray(capabilities.canFull) ? capabilities.canFull : [];
+    const cannotView = Array.isArray(capabilities.cannotView) ? capabilities.cannotView : [];
     const cannotManage = Array.isArray(capabilities.cannotManage) ? capabilities.cannotManage : [];
 
+    if (canView.length > 0) lines.push(`- Can VIEW: ${canView.join(", ")}`);
     if (canManage.length > 0) lines.push(`- Can MANAGE: ${canManage.join(", ")}`);
     if (canFull.length > 0) lines.push(`- Can FULL: ${canFull.join(", ")}`);
+    if (cannotView.length > 0) {
+      lines.push(`- CANNOT view (do NOT try to list/read these modules): ${cannotView.join(", ")}`);
+    }
     if (cannotManage.length > 0) {
       lines.push(`- CANNOT manage (do NOT try write actions here): ${cannotManage.join(", ")}`);
+    }
+
+    const inspectionStages = isObject(capabilities.inspectionStages)
+      ? capabilities.inspectionStages
+      : null;
+    if (inspectionStages) {
+      const available = Array.isArray(inspectionStages.available)
+        ? inspectionStages.available.map(String)
+        : [];
+      const held = Array.isArray(inspectionStages.held)
+        ? inspectionStages.held.map(String)
+        : [];
+      if (available.length > 0) {
+        lines.push(
+          `- Inspection stages user can advance: ${available.join(", ")}`,
+        );
+      }
+      if (held.length > 0) {
+        lines.push(
+          `- Inspection stages user HOLDS approval for: ${held.join(", ")} (use intent="submit" only when the current stage is one of these)`,
+        );
+      }
+      if (available.length === 0 && held.length === 0) {
+        lines.push(
+          "- No inspection stage permissions — do NOT submit/advance inspection workflow on this user's behalf.",
+        );
+      }
     }
   }
 

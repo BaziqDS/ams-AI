@@ -493,8 +493,10 @@ export function Thread() {
 
   const stream = useStreamContext();
   const messages = stream.messages;
-  const renderableMessages = getRenderableChatMessages(messages);
   const isLoading = stream.isLoading;
+  const renderableMessages = getRenderableChatMessages(messages, {
+    suppressPendingTaskText: isLoading,
+  });
   const todos = useMemo(() => stream.values.todos ?? [], [stream.values.todos]);
   const hasVisibleTodo = todos.some((todo) => String(todo.status) !== "completed");
   const showContextChip = Boolean(contextChip && !hasVisibleTodo);
@@ -972,7 +974,7 @@ export function Thread() {
               </>
             }
             footer={
-              <div className="sticky flex flex-col items-center gap-4 bottom-0 bg-white px-0 pr-[2px] pb-5">
+              <div className="sticky flex flex-col items-center gap-4 bottom-0 bg-white px-0 pr-[2px] pb-5 w-full min-w-0">
                 {!chatStarted && !isEmbedded && (
                   <div className="flex gap-3 items-center">
                     <AmsAssistantMark size={32} />

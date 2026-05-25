@@ -9,4 +9,9 @@ const getCurrentTime = tool(async () => new Date().toISOString(), {
   schema: z.object({}),
 });
 
-export const TOOLS = [getCurrentTime, ...FRONTEND_TOOLS];
+export const ORCHESTRATOR_TOOLS = [getCurrentTime];
+export const FRONTEND_CONTROLLER_TOOLS = [...FRONTEND_TOOLS];
+
+// Backward-compatible export for tests/imports that still refer to the legacy
+// single-agent registry.
+export const TOOLS = [...ORCHESTRATOR_TOOLS, ...FRONTEND_CONTROLLER_TOOLS];

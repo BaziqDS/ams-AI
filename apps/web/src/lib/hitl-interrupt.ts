@@ -48,7 +48,17 @@ export type HitlReviewModel = {
   riskLevel: "Low" | "Medium" | "High";
   affectedModules: string[];
   changePreview: string[];
+  /**
+   * The agent's most recent edits — kept for the "what just changed" framing,
+   * useful as a fallback when no full snapshot is available.
+   */
   editableFields: HitlEditableField[];
+  /**
+   * The COMPLETE current form state — every non-readOnly field in the active
+   * form, with its current value (or empty marker). Used by the HITL card's
+   * Fields tab so the user reviews the full form, not just deltas.
+   */
+  currentFormValues: HitlEditableField[];
   auditNote: string;
   approveLabel: string;
   rejectLabel: string;
@@ -81,12 +91,34 @@ export function isHitlInterruptSchema(value: unknown): value is HitlRequest {
 
 export function buildHitlResume(
   request: HitlRequest,
-  type: "approve" | "reject",
-  reason?: HitlRejectionReason,
+  type: "approve" | "reject" | "fix",
+  reasonOrMessage?: HitlRejectionReason | string,
 ): { decisions: HitlDecision[] } {
   return {
     decisions: request.actionRequests.map((action) => {
       if (type === "approve") return { type: "approve" };
+
+      // "fix" rejects the current approval AND carries a free-text user
+      // instruction. The pending submit is cancelled (no form submission
+      // happens), but the agent reads the feedback, corrects the form,
+      // and requests a NEW approval.
+      if (type === "fix") {
+        const feedback = typeof reasonOrMessage === "string" && reasonOrMessage.trim()
+          ? reasonOrMessage.trim()
+          : "(no feedback message provided)";
+        return {
+          type: "reject",
+          message:
+            `REJECTED with user feedback. The pending ${action.name} submit is CANCELLED — do not submit the form. ` +
+            `User feedback to apply before requesting approval again: "${feedback}". ` +
+            `Read this feedback, correct the active form (use set_form_values + search_form_options + the CLEARING / CORRECTING FIELDS procedure as needed), then call request_form_submit again so the user sees an updated approval card.`,
+        };
+      }
+
+      // Standard reject — optionally seeded with a known reason code.
+      const reason = typeof reasonOrMessage === "string"
+        ? (reasonOrMessage as HitlRejectionReason)
+        : undefined;
       const message = reason
         ? `${getHitlRejectionMessage(reason)} (auto-rejected ${action.name} with reason=${reason})`
         : `User rejected ${action.name}. Do not submit the form.`;
@@ -443,6 +475,97 @@ function liveEditableFields(
   });
 }
 
+/**
+ * Build a complete snapshot of the form for the HITL review card.
+ *
+ * Unlike `liveEditableFields` (which only returns fields the agent recently
+ * edited + missing required), this returns EVERY non-readOnly field declared
+ * in the active form's writable schema, with its current value resolved from
+ * the live form state.
+ *
+ * Notes about the schema shape:
+ *   - The frontend's useCopilotForm registers fields as a FLAT list of
+ *     dotted-path names (e.g., "items.0.central_register",
+ *     "items.0.stock_register"), not nested via arrayItemFields. So a "show
+ *     every field" pass is just: walk fieldsByName, resolve each name's
+ *     current value, return the row.
+ *   - activeForm.values is the actual live form state (whatever the user
+ *     and agent have set). It is the primary source of truth here.
+ *
+ * Empty optional fields appear with an empty displayValue (renders as a
+ * blank value cell). Empty required fields are flagged `missing: true` so
+ * the UI renders them in red as "Not filled".
+ */
+function liveAllFields(
+  activeForm: Record<string, unknown> | null,
+  agentChangedFields: string[],
+  agentChangedValues?: unknown,
+): HitlEditableField[] {
+  if (!activeForm) return [];
+  const fieldsByName = fieldMap(activeForm);
+
+  // Source priority for resolving each field's value:
+  //   1. activeForm.values        — live form state (authoritative)
+  //   2. lastAssistantEdit.currentValues — agent's latest snapshot
+  //   3. agent's most recent patch values (helpful if (1) hasn't refreshed)
+  const fallbackValues = [
+    activeForm.values,
+    isObject(activeForm.lastAssistantEdit)
+      ? activeForm.lastAssistantEdit.currentValues
+      : undefined,
+    agentChangedValues
+      ? expandBulkValues(agentChangedValues, agentChangedFields, fieldsByName)
+      : undefined,
+    agentChangedValues,
+  ];
+
+  const valueForField = (name: string) =>
+    fallbackValues.reduce<unknown>((resolved, source) => {
+      if (resolved !== undefined) return resolved;
+      return getNestedValue(source, name);
+    }, undefined);
+
+  // Walk every field declared by the form's writable schema. The schema is
+  // already flattened to dotted-path names by useCopilotForm, so a simple
+  // pass is enough — no array expansion needed.
+  const declaredFieldNames = Array.from(fieldsByName.values())
+    .filter((field) => field.readOnly !== true)
+    .filter((field) => field.type !== "array") // skip parent array containers (children are pre-flattened)
+    .map((field) => field.name);
+
+  // Anything the agent explicitly touched that isn't in the schema (rare —
+  // dotted patches the agent constructed for new rows the schema hasn't
+  // surfaced yet).
+  const extraTouchedNames = expandedFieldNames(
+    agentChangedFields,
+    activeForm,
+    agentChangedValues,
+  ).filter((name) => !fieldsByName.has(name) || fieldsByName.get(name)?.readOnly !== true);
+
+  const allNames = Array.from(
+    new Set([...declaredFieldNames, ...extraTouchedNames]),
+  );
+
+  return allNames.map((name) => {
+    const field = fieldsByName.get(name);
+    const label = typeof field?.label === "string" ? field.label : humanizeToken(name);
+    const value = valueForField(name);
+    const normalizedValue = normalizeFieldValue(value);
+    const required = field?.required === true;
+    const empty = isEmptyFieldValue(normalizedValue);
+    return {
+      name,
+      label,
+      type: normalizeFieldType(field),
+      required,
+      missing: required && empty,
+      value: normalizedValue,
+      displayValue: empty ? "" : renderFieldValue(field, normalizedValue),
+      options: normalizedOptions(field),
+    };
+  });
+}
+
 function expandBulkValues(
   values: unknown,
   fields: string[],
@@ -546,6 +669,11 @@ export function buildHitlReviewModel(
     liveChangedFields.fields,
     liveChangedFields.currentValues,
   );
+  const currentFormValues = liveAllFields(
+    activeForm,
+    liveChangedFields.fields,
+    liveChangedFields.currentValues,
+  );
   const target = renderArg(
     context?.recordLabel ??
       context?.record ??
@@ -602,6 +730,7 @@ export function buildHitlReviewModel(
     affectedModules,
     changePreview,
     editableFields,
+    currentFormValues,
     auditNote:
       typeof context?.auditNote === "string" && context.auditNote.trim()
         ? context.auditNote.trim()

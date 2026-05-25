@@ -137,7 +137,7 @@ test("stale submit tool calls stop before human approval is requested", () => {
     },
   );
 
-  assert.match(message ?? "", /^root = TextContent/);
+  assert.doesNotMatch(message ?? "", /^root = TextContent/);
   assert.match(message ?? "", /current page is \/stock-entries/i);
   assert.match(message ?? "", /Open the relevant form again/i);
 });
@@ -179,7 +179,7 @@ test("targetless submit tool calls stop when the user closed the form", () => {
     },
   );
 
-  assert.match(message ?? "", /^root = TextContent/);
+  assert.doesNotMatch(message ?? "", /^root = TextContent/);
   assert.match(message ?? "", /nothing active to submit/i);
   assert.match(message ?? "", /New Inspection Certificate/);
   assert.match(message ?? "", /Reopen the form/i);

@@ -11,3 +11,6 @@ export const amsOpenUiLibrary = openuiLibrary;
 // Do not widen the generated syntax surface here; AMS-specific guidance lives
 // in prompts.ts before the generated OpenUI system prompt.
 export const amsOpenUiPromptOptions = openuiPromptOptions;
+export const AMS_OPENUI_SYSTEM_PROMPT = amsOpenUiLibrary.prompt({
+  ...amsOpenUiPromptOptions,
+});
