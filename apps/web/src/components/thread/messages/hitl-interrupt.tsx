@@ -258,21 +258,21 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
   const missingCount = detailRows.filter((row) => row.missing).length;
 
   return (
-    <div className="box-border w-full max-w-full min-w-0 overflow-hidden rounded-xl border border-blue-200/80 bg-gradient-to-b from-blue-50/60 to-white text-slate-950 shadow-sm ring-1 ring-blue-100/50">
+    <div className="box-border w-full max-w-full min-w-0 overflow-hidden rounded-xl border border-amber-200/80 bg-gradient-to-br from-amber-50 via-amber-100/60 to-amber-200/40 text-slate-950 shadow-sm ring-1 ring-amber-100/60">
       {/* Header */}
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-blue-100 bg-white/60 px-3 py-2.5 sm:px-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-blue-100/80 text-blue-700">
-            <ShieldCheck className="size-4" />
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-1.5 border-b border-amber-200/70 bg-white/60 px-2.5 py-1.5 sm:px-3">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-amber-100/80 text-amber-700">
+            <ShieldCheck className="size-3.5" />
           </span>
           <div className="min-w-0">
             <Badge
               variant="outline"
-              className="border-blue-200 bg-blue-50/70 px-1.5 py-0 text-[10px] uppercase tracking-[0.14em] text-blue-700"
+              className="border-amber-200 bg-amber-50/70 px-1 py-0 text-[9px] uppercase tracking-[0.12em] text-amber-700"
             >
               Approval required
             </Badge>
-            <div className="mt-0.5 truncate text-[13px] font-semibold text-slate-950">
+            <div className="mt-0.5 truncate text-[12px] font-semibold text-slate-950">
               {model.title}
             </div>
           </div>
@@ -285,10 +285,10 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
               role="tab"
               aria-selected={tab === item}
               className={
-                "h-7 inline-flex items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium transition " +
+                "h-6 inline-flex items-center gap-1 rounded-md border px-2 text-[11px] font-medium transition " +
                 (tab === item
-                  ? "border-slate-300 bg-slate-100 text-slate-900"
-                  : "border-transparent bg-transparent text-slate-500 hover:bg-slate-100/70 hover:text-slate-700")
+                  ? "border-amber-300 bg-amber-100/70 text-amber-900"
+                  : "border-transparent bg-transparent text-amber-700/70 hover:bg-amber-100/50 hover:text-amber-900")
               }
               onClick={() => setTab(item)}
             >
@@ -300,7 +300,7 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
                   {totalFields ? (
                     <Badge
                       variant="secondary"
-                      className="h-4 min-w-4 px-1 text-[10px] font-semibold"
+                      className="h-3.5 min-w-3.5 border-amber-300/60 bg-amber-200/60 px-1 text-[9.5px] font-semibold text-amber-900"
                     >
                       {totalFields}
                     </Badge>
@@ -313,21 +313,21 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
       </div>
 
       {/* Body */}
-      <div className="px-3 pb-3 pt-3 sm:px-4">
+      <div className="px-2.5 pb-2 pt-2 sm:px-3">
         {model.description ? (
-          <p className="mb-3 max-w-3xl text-[13px] leading-5 text-slate-600">
+          <p className="mb-2 max-w-3xl text-[11.5px] leading-[1.4] text-slate-600">
             {model.description}
           </p>
         ) : null}
 
         {tab === "summary" ? (
-          <div className="grid min-w-0 grid-cols-1 gap-x-8 gap-y-1 md:grid-cols-2">
+          <div className="grid min-w-0 grid-cols-1 gap-x-6 gap-y-0.5 md:grid-cols-2">
             {metadata.map(({ label, value, icon: Icon }) => (
               <div
                 key={label}
-                className="grid min-h-9 min-w-0 grid-cols-[18px_minmax(88px,0.45fr)_minmax(0,1fr)] items-center gap-2 border-b border-slate-100 text-[13px] last:border-b-0"
+                className="grid min-h-7 min-w-0 grid-cols-[16px_minmax(80px,0.45fr)_minmax(0,1fr)] items-center gap-1.5 border-b border-slate-100 text-[12px] last:border-b-0"
               >
-                <Icon className="size-4 text-blue-600" />
+                <Icon className="size-3.5 text-amber-600" />
                 <span className="font-medium text-slate-500">{label}</span>
                 <span className="truncate font-medium text-slate-950" title={value}>
                   {value}
@@ -335,12 +335,15 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
               </div>
             ))}
             {totalFields > 0 ? (
-              <div className="col-span-full mt-2 flex flex-wrap items-center gap-2">
-                <Badge variant="secondary">
+              <div className="col-span-full mt-1.5 flex flex-wrap items-center gap-1.5">
+                <Badge
+                  variant="secondary"
+                  className="border-amber-300/60 bg-amber-200/60 px-1.5 py-0 text-[10px] text-amber-900"
+                >
                   {totalFields} field{totalFields === 1 ? "" : "s"} to apply
                 </Badge>
                 {missingCount > 0 ? (
-                  <Badge variant="destructive">
+                  <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">
                     {missingCount} still missing
                   </Badge>
                 ) : null}
@@ -350,23 +353,23 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
         ) : null}
 
         {tab === "fields" ? (
-          <div className="max-h-72 min-w-0 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-[5px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-blue-200/80 [&::-webkit-scrollbar-track]:bg-transparent">
+          <div className="max-h-60 min-w-0 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-[5px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-amber-200/80 [&::-webkit-scrollbar-track]:bg-transparent">
             {groupedFields.length === 0 ? (
-              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50/60 px-3 py-4 text-center text-[12px] text-slate-500">
+              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50/60 px-2.5 py-3 text-center text-[11px] text-slate-500">
                 No field changes captured — the agent will rely on the values already in the form.
               </div>
             ) : (
               groupedFields.map((group, groupIdx) => (
                 <section
                   key={`${group.title}-${groupIdx}`}
-                  className="mb-3 overflow-hidden rounded-lg border border-blue-100/80 bg-white last:mb-0"
+                  className="mb-2 overflow-hidden rounded-lg border border-amber-100/80 bg-white last:mb-0"
                 >
-                  <header className="flex items-baseline justify-between border-b border-blue-100/70 bg-blue-50/40 px-2.5 py-1.5">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.1em] text-blue-700">
+                  <header className="flex items-baseline justify-between border-b border-amber-100/70 bg-amber-50/40 px-2 py-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-amber-700">
                       {group.title}
                     </span>
                     {group.subtitle ? (
-                      <span className="font-mono text-[10px] text-slate-400">
+                      <span className="font-mono text-[9.5px] text-slate-400">
                         {group.subtitle}
                       </span>
                     ) : null}
@@ -375,7 +378,7 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
                     {group.rows.map((row) => (
                       <div
                         key={`${row.name}:${row.value}`}
-                        className="grid min-h-9 min-w-0 grid-cols-[minmax(112px,0.38fr)_minmax(0,1fr)] items-center gap-2 border-b border-slate-100 px-2.5 text-[13px] last:border-b-0"
+                        className="grid min-h-7 min-w-0 grid-cols-[minmax(100px,0.38fr)_minmax(0,1fr)] items-center gap-1.5 border-b border-slate-100 px-2 text-[12px] last:border-b-0"
                       >
                         <span
                           className="truncate font-medium text-slate-500"
@@ -403,12 +406,12 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
       </div>
 
       {/* Footer: feedback input + action buttons */}
-      <div className="border-t border-blue-100 bg-white/70 px-3 py-2.5 sm:px-4">
+      <div className="border-t border-amber-200/70 bg-white/70 px-2.5 py-1.5 sm:px-3">
         {/* Inline feedback textarea — lets the user redirect the agent without
             leaving the card. Empty → Approve. Non-empty → Send fix. */}
-        <div className="mb-2 rounded-md border border-slate-200 bg-white focus-within:border-slate-400 focus-within:ring-1 focus-within:ring-slate-200">
-          <label className="flex items-start gap-2 px-2.5 py-1.5">
-            <MessageSquare className="mt-0.5 size-3.5 shrink-0 text-slate-400" />
+        <div className="mb-1.5 rounded-md border border-slate-200 bg-white focus-within:border-slate-400 focus-within:ring-1 focus-within:ring-slate-200">
+          <label className="flex items-start gap-1.5 px-2 py-1">
+            <MessageSquare className="mt-0.5 size-3 shrink-0 text-slate-400" />
             <textarea
               ref={textareaRef}
               value={feedback}
@@ -421,14 +424,14 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
               }}
               placeholder="Tell the agent what to fix — sending will reject this approval and let the agent correct it."
               rows={1}
-              className="w-full resize-none overflow-hidden border-0 bg-transparent text-[12px] leading-5 text-slate-800 placeholder:text-slate-400 focus:outline-none"
-              style={{ minHeight: 20 }}
+              className="w-full resize-none overflow-hidden border-0 bg-transparent text-[11.5px] leading-[1.4] text-slate-800 placeholder:text-slate-400 focus:outline-none"
+              style={{ minHeight: 18 }}
               disabled={Boolean(busy) || thread.isLoading}
             />
           </label>
         </div>
 
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
           {feedback.trim() ? (
             /* Typing → only the Send icon button. Approve and Reject are
                hidden because typing feedback already implies rejecting the
@@ -440,9 +443,9 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
               title="Reject this approval and send your message — the agent will correct the form and request approval again."
               onClick={() => resume("fix", feedback.trim())}
               disabled={Boolean(busy) || thread.isLoading}
-              className="size-8 p-0"
+              className="size-7 p-0"
             >
-              <ArrowUpIcon />
+              <ArrowUpIcon className="size-3.5" />
             </Button>
           ) : (
             <>
@@ -451,8 +454,9 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
                 size="sm"
                 onClick={() => resume("reject")}
                 disabled={Boolean(busy) || thread.isLoading}
+                className="h-7 px-2.5 text-[11.5px]"
               >
-                <X />
+                <X className="size-3.5" />
                 {busy === "reject" ? "Rejecting…" : "Reject"}
               </Button>
               <Button
@@ -460,8 +464,9 @@ export function HitlInterruptView({ interrupt }: { interrupt: HitlRequest }) {
                 size="sm"
                 onClick={() => resume("approve")}
                 disabled={Boolean(busy) || thread.isLoading}
+                className="h-7 px-2.5 text-[11.5px]"
               >
-                <Check />
+                <Check className="size-3.5" />
                 {busy === "approve" ? "Approving…" : "Approve"}
               </Button>
             </>

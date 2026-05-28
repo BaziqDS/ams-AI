@@ -39,10 +39,12 @@ import { Switch } from "../ui/switch";
 import {
   COPILOT_CONTEXT_EVENT,
   COPILOT_HITL_DECISION_EVENT,
+  COPILOT_PROACTIVE_EVENT,
   COPILOT_VOICE_COMMAND_EVENT,
   copilotBridge,
   type HitlDecision,
   type PageContext,
+  type ProactiveEvent,
   type VoiceCommand,
 } from "@/lib/copilot-bridge";
 import {
@@ -50,6 +52,7 @@ import {
   isHitlInterruptSchema,
 } from "@/lib/hitl-interrupt";
 import { buildVoiceCommandPrompt } from "@/lib/voice-command";
+import { buildProactiveEventPrompt } from "@/lib/proactive-event";
 import { buildAgentRunConfig } from "@/lib/agent-run-config";
 import { TodosPanel } from "./todos-panel";
 import { getRenderableChatMessages } from "@/lib/chat-message-visibility";
@@ -486,6 +489,16 @@ export function Thread() {
     parseAsBoolean.withDefault(false),
   );
   const [input, setInput] = useState("");
+  const [isRecording, setIsRecording] = useState(false);
+  const recognitionRef = useRef<{
+    stop: () => void;
+    abort: () => void;
+    onresult: ((event: unknown) => void) | null;
+    onerror: ((event: unknown) => void) | null;
+    onend: (() => void) | null;
+  } | null>(null);
+  const recordingBaseTextRef = useRef("");
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const [contextChip, setContextChip] = useState<ContextChipState | null>(null);
   const [firstTokenReceived, setFirstTokenReceived] = useState(false);
   const [showTodos, setShowTodos] = useState(false);
@@ -505,11 +518,20 @@ export function Thread() {
   const pendingVoiceCommandRef = useRef<VoiceCommand | null>(null);
   const pendingQuickMessageRef = useRef<string | null>(null);
   const handledVoiceCommandIdsRef = useRef(new Set<string>());
+  // Proactive events: same pattern as voice commands — queue if the stream is
+  // busy, dedup by id so a re-render or duplicate postMessage cannot fire
+  // twice. The parent dispatcher already deduped against its own history,
+  // but we keep a local guard so iframe-side state changes (e.g., remount)
+  // can't replay a stale event.
+  const pendingProactiveEventRef = useRef<ProactiveEvent | null>(null);
+  const handledProactiveEventIdsRef = useRef(new Set<number>());
 
   const handleStartNewThread = useCallback(() => {
     pendingQuickMessageRef.current = null;
     pendingVoiceCommandRef.current = null;
+    pendingProactiveEventRef.current = null;
     handledVoiceCommandIdsRef.current.clear();
+    handledProactiveEventIdsRef.current.clear();
     prevMessageLength.current = 0;
     announcedAssistantMessageIds.current.clear();
     setInput("");
@@ -613,6 +635,28 @@ export function Thread() {
   ) => {
     const trimmed = text.trim();
     if (!trimmed || stream.isLoading) return;
+
+    // Intercept proactive snooze controls. The agent emits these buttons
+    // with a magic prefix on @ToAssistant text; we recognize them here,
+    // postMessage the snooze command to the parent, and DO NOT submit to
+    // the agent. The user clicked "1h" — they don't want a chat round-trip,
+    // they want the proactive offers to stop until later.
+    if (trimmed.startsWith("__AMS_SNOOZE__")) {
+      const token = trimmed.slice("__AMS_SNOOZE__".length).trim();
+      const durationMs =
+        token === "30m" ? 30 * 60_000
+        : token === "1h" ? 60 * 60_000
+        : token === "rest_of_day" ? 8 * 60 * 60_000
+        : 0;
+      if (typeof window !== "undefined" && window.parent !== window && durationMs > 0) {
+        window.parent.postMessage(
+          { source: "ams-copilot-iframe", type: "PROACTIVE_SNOOZE", durationMs },
+          "*",
+        );
+      }
+      return;
+    }
+
     setFirstTokenReceived(false);
 
     const newHumanMessage: Message = {
@@ -658,6 +702,14 @@ export function Thread() {
     });
   }, [submitUserText]);
 
+  // Submit a proactive event as a HIDDEN human turn so the structured trigger
+  // (kind/intent/target) is not visible in chat history — only the agent's
+  // resulting OpenUI card is. The agent's prompt has dedicated rules for
+  // recognizing __AMS_PROACTIVE_EVENT__ and responding with a brief card.
+  const submitProactiveEvent = useCallback(async (event: ProactiveEvent) => {
+    await submitUserText(buildProactiveEventPrompt(event), { hidden: true });
+  }, [submitUserText]);
+
   useEffect(() => {
     const onVoiceCommand = (event: Event) => {
       const command = (event as CustomEvent<VoiceCommand>).detail;
@@ -677,6 +729,33 @@ export function Thread() {
       window.removeEventListener(COPILOT_VOICE_COMMAND_EVENT, onVoiceCommand);
     };
   }, [stream.isLoading, submitVoiceCommand]);
+
+  useEffect(() => {
+    const onProactiveEvent = (event: Event) => {
+      const proactive = (event as CustomEvent<ProactiveEvent>).detail;
+      if (!proactive?.id || handledProactiveEventIdsRef.current.has(proactive.id)) return;
+      handledProactiveEventIdsRef.current.add(proactive.id);
+
+      // Mid-run arrivals queue; the next-idle effect below replays them.
+      // This keeps the agent's current turn uninterrupted while ensuring
+      // no proactive event is silently lost just because the user was
+      // already chatting.
+      if (stream.isLoading) {
+        pendingProactiveEventRef.current = proactive;
+        return;
+      }
+      void submitProactiveEvent(proactive);
+    };
+    window.addEventListener(COPILOT_PROACTIVE_EVENT, onProactiveEvent);
+    return () => window.removeEventListener(COPILOT_PROACTIVE_EVENT, onProactiveEvent);
+  }, [stream.isLoading, submitProactiveEvent]);
+
+  useEffect(() => {
+    if (stream.isLoading || !pendingProactiveEventRef.current) return;
+    const event = pendingProactiveEventRef.current;
+    pendingProactiveEventRef.current = null;
+    void submitProactiveEvent(event);
+  }, [stream.isLoading, submitProactiveEvent]);
 
   useEffect(() => {
     if (stream.isLoading || !pendingVoiceCommandRef.current) return;
@@ -779,18 +858,123 @@ export function Thread() {
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
-    await submitUserText(input);
+    const trimmed = input.trim();
+    if (!trimmed || isLoading) return;
 
+    // Translate Urdu/Arabic-script messages to English via the parent app's
+    // Google Translate endpoint before handing the prompt to the agent.
+    const hasUrdu = /[؀-ۿ]/.test(trimmed);
+    let finalText = trimmed;
+    if (hasUrdu) {
+      try {
+        const translated = await copilotBridge.translate(trimmed, "en", "ur");
+        if (translated.trim()) finalText = translated.trim();
+      } catch (err) {
+        console.warn("[Thread] translate failed, sending original:", err);
+      }
+    }
+
+    await submitUserText(finalText);
     setInput("");
   };
 
-  const handleVoiceCaptureRequest = useCallback(() => {
-    const requested = copilotBridge.requestVoiceCapture();
-    if (!requested) {
-      toast.info("Voice is available from the AMS page.");
+  const stopVoiceRecognition = useCallback(() => {
+    const recognition = recognitionRef.current;
+    recognitionRef.current = null;
+    setIsRecording(false);
+    if (recognition) {
+      // Detach handlers so any late onresult/onend events don't clobber
+      // the user's manual edits after they pressed stop.
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      try {
+        recognition.stop();
+      } catch {
+        try {
+          recognition.abort();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    const textarea = chatInputRef.current;
+    if (textarea) {
+      requestAnimationFrame(() => {
+        textarea.focus();
+        const end = textarea.value.length;
+        try {
+          textarea.setSelectionRange(end, end);
+        } catch {
+          /* ignore */
+        }
+      });
     }
   }, []);
+
+  const handleVoiceCaptureRequest = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (recognitionRef.current) {
+      stopVoiceRecognition();
+      return;
+    }
+    type SpeechRecognitionLike = {
+      continuous: boolean;
+      interimResults: boolean;
+      lang: string;
+      onresult: ((event: unknown) => void) | null;
+      onerror: ((event: unknown) => void) | null;
+      onend: (() => void) | null;
+      start: () => void;
+      stop: () => void;
+      abort: () => void;
+    };
+    const win = window as typeof window & {
+      SpeechRecognition?: new () => SpeechRecognitionLike;
+      webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+    };
+    const Recognition = win.SpeechRecognition ?? win.webkitSpeechRecognition;
+    if (!Recognition) {
+      toast.info("Voice input is not supported in this browser.");
+      return;
+    }
+    const recognition = new Recognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "ur-PK";
+    recordingBaseTextRef.current = input ? `${input} ` : "";
+    recognition.onresult = (event: unknown) => {
+      const results = (event as {
+        results?: ArrayLike<ArrayLike<{ transcript?: string }>>;
+      }).results;
+      if (!results) return;
+      const parts: string[] = [];
+      for (let i = 0; i < results.length; i += 1) {
+        const item = results[i]?.[0]?.transcript;
+        if (item) parts.push(item);
+      }
+      const joined = parts.join(" ").replace(/\s+/g, " ").trim();
+      setInput(`${recordingBaseTextRef.current}${joined}`);
+    };
+    recognition.onerror = () => {
+      recognitionRef.current = null;
+      setIsRecording(false);
+    };
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      setIsRecording(false);
+    };
+    try {
+      recognition.start();
+      recognitionRef.current = recognition;
+      setIsRecording(true);
+    } catch {
+      recognitionRef.current = null;
+      setIsRecording(false);
+    }
+  }, [input, stopVoiceRecognition]);
+
+  useEffect(() => () => stopVoiceRecognition(), [stopVoiceRecognition]);
 
   const handleRegenerate = async (
     parentCheckpoint: Checkpoint | null | undefined,
@@ -1017,6 +1201,7 @@ export function Thread() {
                     className="grid min-w-0 grid-rows-[1fr_auto] gap-1 max-w-3xl mx-auto"
                   >
                     <textarea
+                      ref={chatInputRef}
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       onKeyDown={(e) => {
@@ -1081,10 +1266,15 @@ export function Thread() {
                             type="button"
                             size="icon"
                             variant="ghost"
-                            className="size-7 rounded-[8px] border-0 bg-transparent text-muted-foreground hover:bg-black/5 hover:text-foreground"
+                            className={
+                              "size-7 rounded-[8px] border-0 bg-transparent hover:bg-black/5 " +
+                              (isRecording
+                                ? "text-red-600 hover:text-red-700"
+                                : "text-muted-foreground hover:text-foreground")
+                            }
                             onClick={handleVoiceCaptureRequest}
-                            aria-label="Start voice input"
-                            title="Start voice input"
+                            aria-label={isRecording ? "Stop voice input" : "Start voice input"}
+                            title={isRecording ? "Stop voice input" : "Start voice input"}
                           >
                             <Mic className="size-3.5" strokeWidth={1.9} />
                           </Button>

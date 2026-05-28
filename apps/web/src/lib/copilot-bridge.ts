@@ -62,6 +62,59 @@ type ActionResultMessage = {
   error?: unknown;
 };
 
+type TranslateResultMessage = {
+  source: "ams-copilot";
+  type: "TRANSLATE_RESULT";
+  callId?: string;
+  translatedText?: string;
+  error?: unknown;
+};
+
+type TranscribeResultMessage = {
+  source: "ams-copilot";
+  type: "TRANSCRIBE_RESULT";
+  callId?: string;
+  text?: string;
+  error?: unknown;
+};
+
+/**
+ * Proactive event emitted by the parent when a notification matches the
+ * dispatcher rules. The iframe converts these into a single agent turn that
+ * produces a brief offer card. The shape mirrors TypedNotificationEvent from
+ * the parent — only the fields the iframe needs to compose the agent prompt.
+ *
+ * NOTE: The iframe MUST NOT treat this like a user message; the agent prompt
+ * has a dedicated section explaining proactive turns produce ONE concise
+ * OpenUI card with snooze/dismiss options, never a long lecture.
+ */
+export type ProactiveEvent = {
+  /** Stable id from the originating notification — for client-side dedup. */
+  id: number;
+  /** Typed kind from notificationEvents.ts (already validated upstream). */
+  kind: string;
+  /** Suggested intent — the dispatcher only fires when this is set. */
+  suggestedIntent: string;
+  /** Pointer at the thing the intent should act on. */
+  intentTarget: {
+    form_id?: string;
+    record_id?: number | string;
+    module?: string;
+    route?: string;
+  };
+  /** Human-readable title and message from the notification, for the card. */
+  title: string;
+  message: string;
+  /** Notification severity, so the card can match the tone (info/warning). */
+  severity: string;
+};
+
+type ProactiveEventMessage = {
+  source: "ams-copilot";
+  type: "PROACTIVE_EVENT";
+  event?: ProactiveEvent;
+};
+
 export type PageContext = {
   readables: Readable[];
   actions: ActionDef[];
@@ -75,6 +128,7 @@ export type FreshContextOptions = {
 export const COPILOT_CONTEXT_EVENT = "ams-copilot-context-update";
 export const COPILOT_VOICE_COMMAND_EVENT = "ams-copilot-voice-command";
 export const COPILOT_HITL_DECISION_EVENT = "ams-copilot-hitl-decision";
+export const COPILOT_PROACTIVE_EVENT = "ams-copilot-proactive-event";
 const FRONTEND_ACTION_TIMEOUT_MS = 15_000;
 
 const TRUSTED_PARENT_ORIGIN = process.env.NEXT_PUBLIC_AMS_ORIGIN?.replace(
@@ -90,6 +144,22 @@ export class CopilotBridge {
     string,
     {
       resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private pendingTranslations = new Map<
+    string,
+    {
+      resolve: (value: string) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  private pendingTranscriptions = new Map<
+    string,
+    {
+      resolve: (value: string) => void;
       reject: (error: Error) => void;
       timer: ReturnType<typeof setTimeout>;
     }
@@ -118,8 +188,58 @@ export class CopilotBridge {
       | ActionResultMessage
       | VoiceCommandMessage
       | HitlDecisionMessage
+      | TranslateResultMessage
+      | TranscribeResultMessage
+      | ProactiveEventMessage
     >;
     if (data.source !== "ams-copilot") return;
+
+    if (data.type === "PROACTIVE_EVENT") {
+      const payload = (data as ProactiveEventMessage).event;
+      if (!payload || typeof payload !== "object") return;
+      // Re-dispatch as a window event so the chat thread can react without
+      // coupling to the bridge instance. The thread inspects its own stream
+      // state before consuming — the parent already filtered for "agent
+      // idle" but the iframe's view may be one tick fresher.
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent<ProactiveEvent>(COPILOT_PROACTIVE_EVENT, {
+            detail: payload,
+          }),
+        );
+      }
+      return;
+    }
+
+    if (data.type === "TRANSCRIBE_RESULT") {
+      const callId = data.callId;
+      if (!callId) return;
+      const pending = this.pendingTranscriptions.get(callId);
+      if (!pending) return;
+      this.pendingTranscriptions.delete(callId);
+      clearTimeout(pending.timer);
+      if (data.error) {
+        pending.reject(new Error(String(data.error)));
+      } else {
+        pending.resolve(String(data.text ?? ""));
+      }
+      return;
+    }
+
+    if (data.type === "TRANSLATE_RESULT") {
+      const callId = data.callId;
+      if (!callId) return;
+      const pending = this.pendingTranslations.get(callId);
+      if (!pending) return;
+      this.pendingTranslations.delete(callId);
+      clearTimeout(pending.timer);
+      if (data.error) {
+        pending.reject(new Error(String(data.error)));
+      } else {
+        pending.resolve(String(data.translatedText ?? ""));
+      }
+      return;
+    }
 
     if (data.type === "CONTEXT_UPDATE") {
       this.ingestContextUpdate({
@@ -251,6 +371,60 @@ export class CopilotBridge {
 
   hasParent(): boolean {
     return typeof window !== "undefined" && window.parent !== window;
+  }
+
+  async transcribe(blob: Blob, language = "ur"): Promise<string> {
+    if (!this.hasParent() || blob.size === 0) return "";
+    const arrayBuffer = await blob.arrayBuffer();
+    const callId =
+      Math.random().toString(36).slice(2) + Date.now().toString(36);
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pendingTranscriptions.has(callId)) {
+          this.pendingTranscriptions.delete(callId);
+          reject(new Error("Transcribe request timed out"));
+        }
+      }, 30_000);
+      this.pendingTranscriptions.set(callId, { resolve, reject, timer });
+      window.parent.postMessage(
+        {
+          source: "ams-copilot-iframe",
+          type: "TRANSCRIBE_REQUEST",
+          callId,
+          audio: arrayBuffer,
+          mimeType: blob.type || "audio/webm",
+          language,
+        },
+        TRUSTED_PARENT_ORIGIN ?? "*",
+        [arrayBuffer],
+      );
+    });
+  }
+
+  translate(text: string, target = "en", source = "ur"): Promise<string> {
+    if (!this.hasParent() || !text.trim()) return Promise.resolve(text);
+    const callId =
+      Math.random().toString(36).slice(2) + Date.now().toString(36);
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pendingTranslations.has(callId)) {
+          this.pendingTranslations.delete(callId);
+          reject(new Error("Translate request timed out"));
+        }
+      }, 10_000);
+      this.pendingTranslations.set(callId, { resolve, reject, timer });
+      window.parent.postMessage(
+        {
+          source: "ams-copilot-iframe",
+          type: "TRANSLATE_REQUEST",
+          callId,
+          text,
+          target,
+          sourceLang: source,
+        },
+        TRUSTED_PARENT_ORIGIN ?? "*",
+      );
+    });
   }
 
   requestVoiceCapture(): boolean {

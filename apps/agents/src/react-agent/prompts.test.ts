@@ -19,9 +19,11 @@ test("prompt requires route-aware navigation suggestions before form work", () =
 
 test("prompt reuses the active form and current list page context", () => {
   assert.match(SYSTEM_PROMPT_TEMPLATE, /LIVE PAGE STATE contains an activeForm/i);
+  // Rule was tightened to allow switching to a different form/module while
+  // still preventing duplicate opens of the SAME form. Match the new wording.
   assert.match(
     SYSTEM_PROMPT_TEMPLATE,
-    /Do not call open_form, open_create_\*_form, or navigate_to_route for the same task\/form/i
+    /Do not call open_form, open_create_\*_form, or navigate_to_route to re-open the same form the user is already working in/i
   );
   assert.match(
     SYSTEM_PROMPT_TEMPLATE,
