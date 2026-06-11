@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import { CopilotBridge } from "./copilot-bridge";
+
+const bridgeSource = readFileSync(
+  join(process.cwd(), "src", "lib", "copilot-bridge.ts"),
+  "utf8",
+);
 
 type Listener = (event: MessageEvent) => void;
 
@@ -132,4 +139,9 @@ test("requestVoiceCapture asks the parent AMS shell to start voice mode", () => 
   assert.deepEqual(postedMessages, [
     { source: "ams-copilot-iframe", type: "START_VOICE_CAPTURE" },
   ]);
+});
+
+test("voice transcription goes through the browser recognizer, not the bridge", () => {
+  assert.doesNotMatch(bridgeSource, /transcribe/i);
+  assert.doesNotMatch(bridgeSource, /TRANSCRIBE_REQUEST/);
 });

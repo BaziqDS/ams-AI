@@ -70,7 +70,19 @@ export function buildOpenRouterChatModelConfig(env: EnvLike = process.env) {
     apiKey,
     model: env.OPENROUTER_MODEL ?? "openai/gpt-4o-mini",
     temperature: 0,
-    ...(reasoning ? { modelKwargs: { reasoning } } : {}),
+    modelKwargs: {
+      // Force ONE tool call per step. Every frontend tool (set_form_values,
+      // search_form_options, request_form_submit) suspends the graph with
+      // interrupt() and is resumed by a single browser round-trip. When a
+      // model emits parallel tool calls, multiple interrupts fire in the same
+      // step and the browser cannot resume them 1:1 — their results collapse
+      // onto each other (e.g. three search_form_options calls all coming back
+      // with the LAST field's result). Sequential tool calls keep every
+      // interrupt matched to its own call, and also make weaker/cheaper models
+      // markedly more reliable.
+      parallel_tool_calls: false,
+      ...(reasoning ? { reasoning } : {}),
+    },
     configuration: {
       baseURL: OPENROUTER_BASE_URL,
       defaultHeaders: {
@@ -94,6 +106,12 @@ export function buildGroqChatModelConfig(env: EnvLike = process.env) {
     apiKey,
     model: env.GROQ_MODEL ?? "llama-3.3-70b-versatile",
     temperature: 0,
+    modelKwargs: {
+      // Force ONE tool call per step — see the rationale in
+      // buildOpenRouterChatModelConfig. The frontend tools resume from a single
+      // browser interrupt round-trip and cannot be safely parallelized.
+      parallel_tool_calls: false,
+    },
     configuration: {
       baseURL: GROQ_BASE_URL,
     },

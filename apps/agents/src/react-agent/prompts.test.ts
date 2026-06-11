@@ -1,7 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { SYSTEM_PROMPT_TEMPLATE } from "./prompts.js";
+import { ORCHESTRATOR_PROMPT_TEMPLATE, SYSTEM_PROMPT_TEMPLATE } from "./prompts.js";
+
+test("orchestrator forbids announcing an action then ending the turn without delegating", () => {
+  assert.match(ORCHESTRATOR_PROMPT_TEMPLATE, /NEVER ANNOUNCE-AND-STOP/);
+  assert.match(ORCHESTRATOR_PROMPT_TEMPLATE, /in the SAME turn/i);
+  assert.match(ORCHESTRATOR_PROMPT_TEMPLATE, /call task\(\.\.\.\) to delegate/i);
+});
+
+test("prompts forbid parallel tool/agent calls", () => {
+  assert.match(ORCHESTRATOR_PROMPT_TEMPLATE, /ONE DELEGATION AT A TIME — NO PARALLEL/);
+  assert.match(ORCHESTRATOR_PROMPT_TEMPLATE, /NEVER emit two or more task\(\.\.\.\) calls/i);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /ONE TOOL CALL AT A TIME — NO PARALLEL/);
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /NEVER emit multiple tool calls in parallel/i);
+});
+
+test("frontend prompt tells the model when NOT to call search_form_options", () => {
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /WHEN TO CALL search_form_options/);
+  // Free-text / date fields must never be sent to search_form_options.
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /DO NOT call search_form_options/);
+  // Already-complete select options must be used directly, not re-resolved.
+  assert.match(SYSTEM_PROMPT_TEMPLATE, /optionsState=complete/);
+});
 
 test("prompt requires route-aware navigation suggestions before form work", () => {
   assert.match(

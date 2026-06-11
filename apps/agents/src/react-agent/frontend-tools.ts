@@ -875,6 +875,62 @@ export const runFrontendAction = tool(
   }
 );
 
+export const navigateToRoute = tool(
+  async ({ path, route }, config) => {
+    const target = typeof path === "string" && path.trim() ? path : route;
+    if (typeof target !== "string" || !target.trim()) {
+      return 'navigate_to_route requires a "path" like { path: "/inspections/19" }.';
+    }
+    const result = emitFrontendAction(config, "navigate_to_route", { path: target }, {
+      allowMissingRegisteredAction: true,
+    });
+    return result.message;
+  },
+  {
+    name: "navigate_to_route",
+    description:
+      "Navigate the AMS browser to a relative route (e.g. { path: \"/inspections/19\" }). Use this for plain navigation WITHOUT opening a create form; use open_form for create forms. The page context refreshes before your next step.",
+    schema: z.object({
+      path: z
+        .string()
+        .optional()
+        .describe('Relative AMS route beginning with /, e.g. "/inspections/19".'),
+      route: z
+        .string()
+        .optional()
+        .describe('Alias for path. Either path or route must be provided.'),
+    }),
+  }
+);
+
+export const openForm = tool(
+  async ({ form_id, formId }, config) => {
+    const target = typeof form_id === "string" && form_id.trim() ? form_id : formId;
+    if (typeof target !== "string" || !target.trim()) {
+      return 'open_form requires a "form_id" like { form_id: "inspection_create" }.';
+    }
+    const result = emitFrontendAction(config, "open_form", { form_id: target }, {
+      requireRegistered: true,
+    });
+    return result.message;
+  },
+  {
+    name: "open_form",
+    description:
+      "Open an AMS create form by form_id (e.g. { form_id: \"inspection_create\" }). This single call handles BOTH navigation and opening the modal. Use get_app_map to discover valid form ids. After it opens, read the refreshed active form before filling.",
+    schema: z.object({
+      form_id: z
+        .string()
+        .optional()
+        .describe('Create form id, e.g. "inspection_create", "item_create".'),
+      formId: z
+        .string()
+        .optional()
+        .describe("Alias for form_id."),
+    }),
+  }
+);
+
 export const resolveRelativeDate = tool(
   async ({ phrase }) => {
     const now = new Date();
@@ -937,6 +993,8 @@ export const FRONTEND_TOOLS = [
   searchFormOptions,
   requestFormSubmit,
   getAppMap,
+  navigateToRoute,
+  openForm,
   runFrontendAction,
   resolveRelativeDate,
 ];

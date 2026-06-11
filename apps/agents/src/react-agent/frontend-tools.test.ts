@@ -802,6 +802,8 @@ test("frontend tool list exposes only production agent actions", async () => {
     "search_form_options",
     "request_form_submit",
     "get_app_map",
+    "navigate_to_route",
+    "open_form",
     "run_frontend_action",
     "resolve_relative_date",
   ]);

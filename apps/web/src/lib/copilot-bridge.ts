@@ -70,14 +70,6 @@ type TranslateResultMessage = {
   error?: unknown;
 };
 
-type TranscribeResultMessage = {
-  source: "ams-copilot";
-  type: "TRANSCRIBE_RESULT";
-  callId?: string;
-  text?: string;
-  error?: unknown;
-};
-
 /**
  * Proactive event emitted by the parent when a notification matches the
  * dispatcher rules. The iframe converts these into a single agent turn that
@@ -156,14 +148,6 @@ export class CopilotBridge {
       timer: ReturnType<typeof setTimeout>;
     }
   >();
-  private pendingTranscriptions = new Map<
-    string,
-    {
-      resolve: (value: string) => void;
-      reject: (error: Error) => void;
-      timer: ReturnType<typeof setTimeout>;
-    }
-  >();
   private initialized = false;
 
   init() {
@@ -189,7 +173,6 @@ export class CopilotBridge {
       | VoiceCommandMessage
       | HitlDecisionMessage
       | TranslateResultMessage
-      | TranscribeResultMessage
       | ProactiveEventMessage
     >;
     if (data.source !== "ams-copilot") return;
@@ -207,21 +190,6 @@ export class CopilotBridge {
             detail: payload,
           }),
         );
-      }
-      return;
-    }
-
-    if (data.type === "TRANSCRIBE_RESULT") {
-      const callId = data.callId;
-      if (!callId) return;
-      const pending = this.pendingTranscriptions.get(callId);
-      if (!pending) return;
-      this.pendingTranscriptions.delete(callId);
-      clearTimeout(pending.timer);
-      if (data.error) {
-        pending.reject(new Error(String(data.error)));
-      } else {
-        pending.resolve(String(data.text ?? ""));
       }
       return;
     }
@@ -371,34 +339,6 @@ export class CopilotBridge {
 
   hasParent(): boolean {
     return typeof window !== "undefined" && window.parent !== window;
-  }
-
-  async transcribe(blob: Blob, language = "ur"): Promise<string> {
-    if (!this.hasParent() || blob.size === 0) return "";
-    const arrayBuffer = await blob.arrayBuffer();
-    const callId =
-      Math.random().toString(36).slice(2) + Date.now().toString(36);
-    return new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (this.pendingTranscriptions.has(callId)) {
-          this.pendingTranscriptions.delete(callId);
-          reject(new Error("Transcribe request timed out"));
-        }
-      }, 30_000);
-      this.pendingTranscriptions.set(callId, { resolve, reject, timer });
-      window.parent.postMessage(
-        {
-          source: "ams-copilot-iframe",
-          type: "TRANSCRIBE_REQUEST",
-          callId,
-          audio: arrayBuffer,
-          mimeType: blob.type || "audio/webm",
-          language,
-        },
-        TRUSTED_PARENT_ORIGIN ?? "*",
-        [arrayBuffer],
-      );
-    });
   }
 
   translate(text: string, target = "en", source = "ur"): Promise<string> {

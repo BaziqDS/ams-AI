@@ -62,7 +62,10 @@ function withoutVisibleAiText(message: Message): Message {
   };
 }
 
-export function getRenderableChatMessage(message: Message): Message | null {
+export function getRenderableChatMessage(message: Message | null | undefined): Message | null {
+  // The LangGraph SDK's streamed message list can transiently contain holes
+  // (undefined slots) during optimistic updates and interrupt/resume merges.
+  if (!message) return null;
   if (message.type === "system") return null;
   if (!message.id?.startsWith(DO_NOT_RENDER_ID_PREFIX)) return message;
   if (message.type !== "human") return null;
@@ -91,6 +94,7 @@ export function getRenderableChatMessages(
   let pendingAnonymousTaskToolCalls = 0;
 
   for (const message of messages) {
+    if (!message) continue;
     const hasPendingTask =
       pendingTaskToolCallIds.size > 0 || pendingAnonymousTaskToolCalls > 0;
 

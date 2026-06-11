@@ -13,6 +13,7 @@ import {
 } from "./model-config.js";
 import { openUiGeneratedPromptMiddleware } from "./openui-generated-prompt-middleware.js";
 import { pageContextMiddleware } from "./page-context-middleware.js";
+import { serialTaskGuardMiddleware } from "./serial-task-guard.js";
 import {
   FRONTEND_CONTROLLER_PROMPT_TEMPLATE,
   ORCHESTRATOR_PROMPT_TEMPLATE,
@@ -72,11 +73,13 @@ function createRuntimeMiddleware({
   includeFrontendGuard,
   includeOpenUiGeneratedPrompt,
   includePageContext,
+  includeSerialTaskGuard = false,
   runLimit,
 }: {
   includeFrontendGuard: boolean;
   includeOpenUiGeneratedPrompt: boolean;
   includePageContext: boolean;
+  includeSerialTaskGuard?: boolean;
   runLimit: number;
 }) {
   return [
@@ -84,8 +87,13 @@ function createRuntimeMiddleware({
     ...(includePageContext ? [pageContextMiddleware] : []),
     toolCallLimitMiddleware({
       runLimit,
-      exitBehavior: "end",
+      // "end" throws ("Cannot end execution with other tool calls pending")
+      // when the limit trips while the model has parallel calls to multiple
+      // tools in flight. "continue" blocks the excess calls with error
+      // ToolMessages and lets the model wind down gracefully instead.
+      exitBehavior: "continue",
     }),
+    ...(includeSerialTaskGuard ? [serialTaskGuardMiddleware] : []),
     ...(includeFrontendGuard ? [frontendFailureGuardMiddleware] : []),
     contextEditingMiddleware(),
     ...(includeOpenUiGeneratedPrompt
@@ -157,6 +165,9 @@ const agent = createDeepAgent({
     includeFrontendGuard: false,
     includeOpenUiGeneratedPrompt: true,
     includePageContext: true,
+    // Only the orchestrator owns the task tool, so only it needs the
+    // parallel-delegation backstop.
+    includeSerialTaskGuard: true,
     runLimit: toolCallRunLimit,
   }),
   systemPrompt: runtimePrompt(ORCHESTRATOR_PROMPT_TEMPLATE),

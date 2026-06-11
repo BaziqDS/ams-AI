@@ -45,10 +45,19 @@ test("OpenRouter model config passes reasoning through modelKwargs", () => {
   assert.equal(config.apiKey, "key");
   assert.equal(config.model, "qwen/qwen3-235b-a22b-thinking-2507");
   assert.deepEqual(config.modelKwargs, {
+    parallel_tool_calls: false,
     reasoning: {
       enabled: true,
       effort: "low",
       exclude: false,
     },
   });
+});
+
+test("OpenRouter model config disables parallel tool calls even without reasoning", () => {
+  const config = buildOpenRouterChatModelConfig({
+    OPENROUTER_API_KEY: "key",
+  });
+
+  assert.deepEqual(config.modelKwargs, { parallel_tool_calls: false });
 });

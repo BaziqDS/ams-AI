@@ -9,6 +9,7 @@ export function buildVoiceCommandPrompt(text: string) {
     "For create/open/navigation requests, prefer run_frontend_action against the current registered actions, especially open_form with { form_id: \"inspection_create\" | \"location_create\" | \"category_create\" | \"item_create\" | \"stock_entry_create\" | \"stock_register_create\" } when applicable.",
     "If the relevant frontend action is available and allowed, perform it directly and reply briefly for voice playback.",
     "If the action is unavailable or blocked, explain the exact blocker briefly instead of rendering a chat-only workaround.",
+    "This is voice mode, so ALWAYS include the <voice>…</voice> narration line above the root = line in your final reply (one short plain-English sentence — the platform translates it to Urdu before playback), per the voice_narration rules.",
     "",
     `User voice command: ${text.trim()}`,
   ].join("\n");

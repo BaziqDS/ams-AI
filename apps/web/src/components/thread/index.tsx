@@ -52,6 +52,7 @@ import {
   isHitlInterruptSchema,
 } from "@/lib/hitl-interrupt";
 import { buildVoiceCommandPrompt } from "@/lib/voice-command";
+import { extractSpeakableText } from "@/lib/speakable-text";
 import { buildProactiveEventPrompt } from "@/lib/proactive-event";
 import { buildAgentRunConfig } from "@/lib/agent-run-config";
 import { TodosPanel } from "./todos-panel";
@@ -61,6 +62,92 @@ const NO_PROACTIVE_RESPONSE = "__AMS_NO_PROACTIVE_RESPONSE__";
 const RESILIENT_STREAM_OPTIONS = {
   onDisconnect: "continue" as const,
 };
+const VOICE_AUDIO_CONSTRAINTS: MediaStreamConstraints = {
+  audio: {
+    channelCount: { ideal: 1 },
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: false,
+    sampleRate: { ideal: 48000 },
+    sampleSize: { ideal: 16 },
+  },
+};
+const DEFAULT_AUDIO_DEVICE_ID = "default";
+
+type AudioInputDevice = {
+  deviceId: string;
+  label: string;
+};
+
+type SpeechRecognitionLike = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionResultEventLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+};
+
+type SpeechRecognitionResultEventLike = {
+  resultIndex: number;
+  results: {
+    length: number;
+    [index: number]: {
+      isFinal: boolean;
+      length: number;
+      [index: number]: { transcript: string };
+    };
+  };
+};
+
+type SpeechRecognitionWindow = typeof window & {
+  SpeechRecognition?: new () => SpeechRecognitionLike;
+  webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+};
+
+function buildVoiceAudioConstraints(deviceId: string): MediaStreamConstraints {
+  const audio =
+    typeof VOICE_AUDIO_CONSTRAINTS.audio === "object"
+      ? { ...VOICE_AUDIO_CONSTRAINTS.audio }
+      : {};
+  return {
+    audio: {
+      ...audio,
+      ...(deviceId && deviceId !== DEFAULT_AUDIO_DEVICE_ID
+        ? { deviceId: { exact: deviceId } }
+        : {}),
+    },
+  };
+}
+
+function normalizeUrduVoicePreview(text: string): string {
+  return text
+    .replace(/\binspections?\b/gi, "انسپیکشن")
+    .replace(/\bitems?\b/gi, "آئٹم")
+    .replace(/\blocations?\b/gi, "لوکیشن")
+    .replace(/\bstores?\b/gi, "اسٹور")
+    .replace(/\bstock\b/gi, "اسٹاک")
+    .replace(/\bentries\b/gi, "انٹریز")
+    .replace(/\bentry\b/gi, "انٹری")
+    .replace(/\bregisters?\b/gi, "رجسٹر")
+    .replace(/\bcategories?\b/gi, "کیٹیگری")
+    .replace(/\bserials?\b/gi, "سیریل")
+    .replace(/\bnumbers?\b/gi, "نمبر")
+    .replace(/\bapproval\b/gi, "اپروول")
+    .replace(/\bapprove\b/gi, "اپروو")
+    .replace(/\breject\b/gi, "ریجیکٹ")
+    .replace(/\bfinance\b/gi, "فنانس")
+    .replace(/\bmaintenance\b/gi, "مینٹیننس")
+    .replace(/\bemployee\b/gi, "ایمپلائی")
+    .replace(/\bemployees\b/gi, "ایمپلائز")
+    .replace(/\bdepartment\b/gi, "ڈیپارٹمنٹ")
+    .replace(/\bdepartments\b/gi, "ڈیپارٹمنٹس")
+    .replace(/\bCSIT\b/g, "سی ایس آئی ٹی")
+    .replace(/\bAMS\b/g, "اے ایم ایس");
+}
 
 type ContextChipState = {
   kind: "form" | "list" | "detail" | "page";
@@ -112,6 +199,22 @@ function notifyParentAssistantLoading(isLoading: boolean) {
       source: "ams-copilot-iframe",
       type: "ASSISTANT_LOADING",
       isLoading,
+    },
+    "*",
+  );
+}
+
+// Sent once per completed run with the final reply's speakable text — the
+// parent AMS app narrates it through Uplift TTS (/api/copilot/voice/speak).
+function notifyParentSpeakText(messageId: string | undefined, text: string) {
+  if (!messageId || !text || typeof window === "undefined" || window.parent === window)
+    return;
+  window.parent.postMessage(
+    {
+      source: "ams-copilot-iframe",
+      type: "SPEAK_TEXT",
+      messageId,
+      text,
     },
     "*",
   );
@@ -490,9 +593,19 @@ export function Thread() {
   );
   const [input, setInput] = useState("");
   const [isRecording, setIsRecording] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const [isStartingVoice, setIsStartingVoice] = useState(false);
+  const [audioInputDevices, setAudioInputDevices] = useState<AudioInputDevice[]>([]);
+  const [selectedAudioDeviceId, setSelectedAudioDeviceId] = useState(DEFAULT_AUDIO_DEVICE_ID);
+  const [voiceLevel, setVoiceLevel] = useState(0);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+  const pendingMicStreamRef = useRef<Promise<MediaStream> | null>(null);
+  const voiceStartCancelledRef = useRef(false);
+  const recordingBaseTextRef = useRef("");
+  const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const speechRecognitionFinalRef = useRef("");
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const voiceMeterFrameRef = useRef<number | null>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const [contextChip, setContextChip] = useState<ContextChipState | null>(null);
   const [firstTokenReceived, setFirstTokenReceived] = useState(false);
@@ -500,7 +613,14 @@ export function Thread() {
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
 
   const stream = useStreamContext();
-  const messages = stream.messages;
+  // The stream's message list can contain undefined holes when a run dies
+  // mid-stream (e.g. a crashed parallel-subagent run) or when concurrent
+  // branches stream interleaved chunks. Reading `.type` on a hole crashes the
+  // whole Thread render, so drop holes once here for every consumer below.
+  const messages = useMemo(
+    () => (stream.messages ?? []).filter(Boolean),
+    [stream.messages],
+  );
   const isLoading = stream.isLoading;
   const renderableMessages = getRenderableChatMessages(messages, {
     suppressPendingTaskText: isLoading,
@@ -624,6 +744,28 @@ export function Thread() {
     notifyParentAssistantMessage(latest.id, contentString);
   }, [messages]);
 
+  // Voice replies: unlike ASSISTANT_MESSAGE above (which fires on the first
+  // streamed token), narration must wait for the COMPLETE reply — so it
+  // triggers on the isLoading true→false transition, when the final text is
+  // fully streamed.
+  const spokenMessageIds = useRef(new Set<string>());
+  const prevIsLoadingRef = useRef(false);
+  useEffect(() => {
+    const wasLoading = prevIsLoadingRef.current;
+    prevIsLoadingRef.current = isLoading;
+    if (!wasLoading || isLoading) return;
+
+    const latest = messages[messages.length - 1];
+    if (!latest || latest.type !== "ai" || !latest.id) return;
+    if (spokenMessageIds.current.has(latest.id)) return;
+
+    const speakable = extractSpeakableText(getContentString(latest.content ?? []));
+    if (!speakable) return;
+
+    spokenMessageIds.current.add(latest.id);
+    notifyParentSpeakText(latest.id, speakable);
+  }, [isLoading, messages]);
+
   const submitUserText = useCallback(async (
     text: string,
     options: { hidden?: boolean } = {},
@@ -663,7 +805,9 @@ export function Thread() {
       notifyParentHumanMessage(newHumanMessage.id, trimmed);
     }
 
-    const toolMessages = ensureToolCallsHaveResponses(stream.messages);
+    const toolMessages = ensureToolCallsHaveResponses(
+      (stream.messages ?? []).filter(Boolean),
+    );
     const pageContext = await copilotBridge.getFreshContext({
       timeoutMs: 5000,
       requireFresh: true,
@@ -856,27 +1000,175 @@ export function Thread() {
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
 
-    // Translate Urdu/Arabic-script messages to English via the parent app's
-    // Google Translate endpoint before handing the prompt to the agent.
-    const hasUrdu = /[؀-ۿ]/.test(trimmed);
-    let finalText = trimmed;
-    if (hasUrdu) {
-      try {
-        const translated = await copilotBridge.translate(trimmed, "en", "ur");
-        if (translated.trim()) finalText = translated.trim();
-      } catch (err) {
-        console.warn("[Thread] translate failed, sending original:", err);
-      }
-    }
+    // TEMP: translation disabled — send the raw Urdu/English mix straight to
+    // the model, matching the detached composer in the AMS side panel.
+    // Re-enable the block below to restore English-only input to the agent.
+    // const hasUrduScript = /[؀-ۿ]/.test(trimmed);
+    // const hasDevanagari = /[ऀ-ॿ]/.test(trimmed);
+    // let finalText = trimmed;
+    // if (hasUrduScript || hasDevanagari) {
+    //   try {
+    //     const translated = await copilotBridge.translate(
+    //       trimmed,
+    //       "en",
+    //       hasUrduScript ? "ur" : "hi",
+    //     );
+    //     if (translated.trim()) finalText = translated.trim();
+    //   } catch (err) {
+    //     console.warn("[Thread] translate failed, sending original:", err);
+    //   }
+    // }
 
-    await submitUserText(finalText);
+    await submitUserText(trimmed);
     setInput("");
   };
 
+  const refreshAudioInputDevices = useCallback(async () => {
+    if (typeof window === "undefined" || !navigator.mediaDevices?.enumerateDevices) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const inputs = devices
+        .filter((device) => device.kind === "audioinput")
+        .map((device, index) => ({
+          deviceId: device.deviceId || DEFAULT_AUDIO_DEVICE_ID,
+          label: device.label || `Microphone ${index + 1}`,
+        }));
+      setAudioInputDevices(inputs);
+      setSelectedAudioDeviceId((current) =>
+        current === DEFAULT_AUDIO_DEVICE_ID || inputs.some((device) => device.deviceId === current)
+          ? current
+          : DEFAULT_AUDIO_DEVICE_ID,
+      );
+    } catch (err) {
+      console.warn("[Thread] could not enumerate audio devices:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshAudioInputDevices();
+    if (typeof window === "undefined" || !navigator.mediaDevices?.addEventListener) return;
+    navigator.mediaDevices.addEventListener("devicechange", refreshAudioInputDevices);
+    return () => navigator.mediaDevices.removeEventListener("devicechange", refreshAudioInputDevices);
+  }, [refreshAudioInputDevices]);
+
+  const stopVoiceMeter = useCallback(() => {
+    if (voiceMeterFrameRef.current !== null) {
+      cancelAnimationFrame(voiceMeterFrameRef.current);
+      voiceMeterFrameRef.current = null;
+    }
+    analyserRef.current = null;
+    const context = audioContextRef.current;
+    audioContextRef.current = null;
+    if (context && context.state !== "closed") {
+      void context.close().catch(() => undefined);
+    }
+    setVoiceLevel(0);
+  }, []);
+
+  const startVoiceMeter = useCallback((stream: MediaStream) => {
+    stopVoiceMeter();
+    const AudioContextCtor =
+      window.AudioContext ??
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) return;
+    try {
+      const context = new AudioContextCtor();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.72;
+      const source = context.createMediaStreamSource(stream);
+      source.connect(analyser);
+      const samples = new Uint8Array(analyser.fftSize);
+      audioContextRef.current = context;
+      analyserRef.current = analyser;
+      const tick = () => {
+        analyser.getByteTimeDomainData(samples);
+        let sum = 0;
+        for (const value of samples) {
+          const normalized = (value - 128) / 128;
+          sum += normalized * normalized;
+        }
+        const rms = Math.sqrt(sum / samples.length);
+        setVoiceLevel(Math.min(1, rms * 4.5));
+        voiceMeterFrameRef.current = requestAnimationFrame(tick);
+      };
+      tick();
+    } catch (err) {
+      console.warn("[Thread] could not start voice meter:", err);
+    }
+  }, [stopVoiceMeter]);
+
+  const stopRealtimeTranscriptPreview = useCallback(() => {
+    const recognition = speechRecognitionRef.current;
+    speechRecognitionRef.current = null;
+    if (recognition) {
+      recognition.onend = null;
+      recognition.onerror = null;
+      recognition.onresult = null;
+      try {
+        recognition.stop();
+      } catch {
+        try {
+          recognition.abort();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    speechRecognitionFinalRef.current = "";
+  }, []);
+
+  const startRealtimeTranscriptPreview = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const Recognition =
+      (window as SpeechRecognitionWindow).SpeechRecognition ??
+      (window as SpeechRecognitionWindow).webkitSpeechRecognition;
+    if (!Recognition) return;
+    stopRealtimeTranscriptPreview();
+    try {
+      const recognition = new Recognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "ur-PK";
+      speechRecognitionFinalRef.current = "";
+      recognition.onresult = (event) => {
+        let interim = "";
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+          const result = event.results[index];
+          const transcript = result[0]?.transcript?.trim() ?? "";
+          if (!transcript) continue;
+          if (result.isFinal) {
+            speechRecognitionFinalRef.current = `${speechRecognitionFinalRef.current} ${transcript}`.trim();
+          } else {
+            interim = `${interim} ${transcript}`.trim();
+          }
+        }
+        // Stream the interim transcript straight into the composer textarea —
+        // same behavior as the detached composer. recordingBaseTextRef holds
+        // whatever was already typed before recording started, so we always
+        // rebuild from that base rather than appending to the growing preview.
+        const preview = normalizeUrduVoicePreview(`${speechRecognitionFinalRef.current} ${interim}`.trim());
+        setInput(`${recordingBaseTextRef.current}${preview}`);
+      };
+      recognition.onerror = () => {
+        speechRecognitionRef.current = null;
+      };
+      recognition.onend = () => {
+        speechRecognitionRef.current = null;
+      };
+      recognition.start();
+      speechRecognitionRef.current = recognition;
+    } catch (err) {
+      console.warn("[Thread] realtime speech preview unavailable:", err);
+    }
+  }, [stopRealtimeTranscriptPreview]);
+
   const releaseMediaStream = useCallback(() => {
+    stopVoiceMeter();
+    stopRealtimeTranscriptPreview();
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     mediaStreamRef.current = null;
-  }, []);
+  }, [stopRealtimeTranscriptPreview, stopVoiceMeter]);
 
   const focusChatInput = useCallback(() => {
     const textarea = chatInputRef.current;
@@ -893,78 +1185,94 @@ export function Thread() {
     }
   }, []);
 
-  const stopVoiceRecording = useCallback(() => {
-    const recorder = mediaRecorderRef.current;
-    mediaRecorderRef.current = null;
+  const stopVoiceRecognition = useCallback(() => {
+    voiceStartCancelledRef.current = true;
     setIsRecording(false);
-    if (recorder && recorder.state !== "inactive") {
-      try {
-        recorder.stop();
-      } catch {
-        releaseMediaStream();
-      }
-    } else {
-      releaseMediaStream();
-    }
-  }, [releaseMediaStream]);
+    setIsStartingVoice(false);
+    // Whatever the recognizer last streamed into the composer simply stays —
+    // we just stop listening and release the mic stream used for the meter.
+    releaseMediaStream();
+    // Put the cursor at the end of the captured text so the user can edit it.
+    focusChatInput();
+  }, [focusChatInput, releaseMediaStream]);
 
-  // Voice input records audio locally (MediaRecorder) and transcribes it in
-  // one shot through the parent AMS app's Whisper endpoint. No realtime
-  // word-by-word browser recognition — the transcript lands once, complete.
-  const handleVoiceCaptureRequest = useCallback(async () => {
+  // Voice input is pure browser SpeechRecognition — the same behavior as the
+  // detached composer in the AMS side panel. While the mic is live the
+  // recognizer streams its interim transcript straight into the composer
+  // textarea, and whatever is shown when the user stops simply stays — there
+  // is no separate audio recording and no server (Whisper) round-trip, so the
+  // text never changes out from under the user on stop. A short-lived
+  // getUserMedia stream is opened only to drive the on-screen mic-level meter
+  // (it is not recorded anywhere).
+
+  // Opening the capture device adds 100–500ms latency (longer on Bluetooth
+  // headsets). Kick getUserMedia off on pointerdown so the mic-level meter is
+  // ready by the time the click handler runs.
+  const prewarmMicrophone = useCallback(() => {
     if (typeof window === "undefined") return;
-    if (mediaRecorderRef.current) {
-      stopVoiceRecording();
+    if (mediaStreamRef.current || pendingMicStreamRef.current) return;
+    if (!navigator.mediaDevices?.getUserMedia) return;
+    const promise = navigator.mediaDevices.getUserMedia(buildVoiceAudioConstraints(selectedAudioDeviceId));
+    pendingMicStreamRef.current = promise;
+    promise
+      .then((stream) => {
+        void refreshAudioInputDevices();
+        // If the press never became a click (pointer dragged away), don't
+        // hold the mic open in the background.
+        setTimeout(() => {
+          if (pendingMicStreamRef.current === promise && !mediaStreamRef.current) {
+            pendingMicStreamRef.current = null;
+            stream.getTracks().forEach((track) => track.stop());
+          }
+        }, 10_000);
+      })
+      .catch(() => {
+        if (pendingMicStreamRef.current === promise) pendingMicStreamRef.current = null;
+      });
+  }, [refreshAudioInputDevices, selectedAudioDeviceId]);
+
+  const handleVoiceCaptureRequest = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (mediaStreamRef.current || isStartingVoice) {
+      stopVoiceRecognition();
       return;
     }
-    if (!copilotBridge.hasParent()) {
-      toast.info("Voice input is available inside the AMS app.");
-      return;
-    }
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    const Recognition =
+      (window as SpeechRecognitionWindow).SpeechRecognition ??
+      (window as SpeechRecognitionWindow).webkitSpeechRecognition;
+    if (!Recognition || !navigator.mediaDevices?.getUserMedia) {
       toast.info("Voice input is not supported in this browser.");
       return;
     }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaStreamRef.current = stream;
-      const recorder = new MediaRecorder(stream);
-      audioChunksRef.current = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) audioChunksRef.current.push(event.data);
-      };
-      recorder.onstop = async () => {
-        releaseMediaStream();
-        const blob = new Blob(audioChunksRef.current, {
-          type: recorder.mimeType || "audio/webm",
-        });
-        audioChunksRef.current = [];
-        if (blob.size === 0) return;
-        try {
-          // "auto" lets Whisper detect the spoken language, so English,
-          // Urdu, and mixed commands all transcribe correctly.
-          const transcript = (await copilotBridge.transcribe(blob, "auto")).trim();
-          if (transcript) {
-            setInput((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
-            focusChatInput();
-          }
-        } catch (err) {
-          console.warn("[Thread] transcription failed:", err);
-          toast.error("Could not transcribe voice input. Please try again.");
+    voiceStartCancelledRef.current = false;
+    setIsStartingVoice(true);
+    const streamPromise =
+      pendingMicStreamRef.current ?? navigator.mediaDevices.getUserMedia(buildVoiceAudioConstraints(selectedAudioDeviceId));
+    pendingMicStreamRef.current = null;
+    streamPromise
+      .then((stream) => {
+        if (voiceStartCancelledRef.current) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
         }
-      };
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      setIsRecording(true);
-    } catch {
-      releaseMediaStream();
-      mediaRecorderRef.current = null;
-      setIsRecording(false);
-      toast.info("Microphone access was denied.");
-    }
-  }, [stopVoiceRecording, releaseMediaStream, focusChatInput]);
+        mediaStreamRef.current = stream;
+        startVoiceMeter(stream);
+        void refreshAudioInputDevices();
+        // Remember whatever was already typed so the live transcript appends
+        // to it rather than replacing it.
+        recordingBaseTextRef.current = input ? `${input} ` : "";
+        setIsStartingVoice(false);
+        setIsRecording(true);
+        startRealtimeTranscriptPreview();
+      })
+      .catch((err) => {
+        setIsStartingVoice(false);
+        console.warn("[Thread] microphone access denied:", err);
+        toast.info("Microphone access was denied.");
+      });
+  }, [input, isStartingVoice, refreshAudioInputDevices, selectedAudioDeviceId, startRealtimeTranscriptPreview, startVoiceMeter, stopVoiceRecognition]);
 
-  useEffect(() => () => stopVoiceRecording(), [stopVoiceRecording]);
+  useEffect(() => () => stopVoiceRecognition(), [stopVoiceRecognition]);
 
   const handleRegenerate = async (
     parentCheckpoint: Checkpoint | null | undefined,
@@ -1251,6 +1559,45 @@ export function Thread() {
                         </Button>
                       ) : (
                         <div className="flex items-center gap-2">
+                          {audioInputDevices.length > 1 ? (
+                            <select
+                              value={selectedAudioDeviceId}
+                              disabled={isRecording || isStartingVoice}
+                              onChange={(event) => {
+                                pendingMicStreamRef.current = null;
+                                setSelectedAudioDeviceId(event.target.value);
+                              }}
+                              aria-label="Voice input microphone"
+                              title="Voice input microphone"
+                              className="h-7 max-w-[9rem] rounded-[8px] border border-border/70 bg-background px-2 text-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground focus:border-primary/50 focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <option value={DEFAULT_AUDIO_DEVICE_ID}>Default mic</option>
+                              {audioInputDevices.map((device) => (
+                                <option key={device.deviceId} value={device.deviceId}>
+                                  {device.label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : null}
+                          {(isRecording || isStartingVoice) ? (
+                            <span
+                              className="relative h-1.5 w-11 overflow-hidden rounded-full bg-muted"
+                              aria-label={
+                                isRecording
+                                  ? `Voice input level ${Math.round(voiceLevel * 100)} percent`
+                                  : "Starting microphone"
+                              }
+                              title={isRecording ? "Recording audio" : "Opening microphone"}
+                            >
+                              <span
+                                className={
+                                  "block h-full min-w-1.5 rounded-full transition-[width] duration-75 " +
+                                  (isRecording ? "bg-red-500" : "bg-primary/70")
+                                }
+                                style={{ width: `${Math.max(6, Math.round(voiceLevel * 100))}%` }}
+                              />
+                            </span>
+                          ) : null}
                           {/* mic — matches detached: transparent bg, muted icon, 28 px, 8 px radius */}
                           <Button
                             type="button"
@@ -1260,11 +1607,14 @@ export function Thread() {
                               "size-7 rounded-[8px] border-0 bg-transparent hover:bg-black/5 " +
                               (isRecording
                                 ? "text-red-600 hover:text-red-700"
-                                : "text-muted-foreground hover:text-foreground")
+                                : isStartingVoice
+                                  ? "text-muted-foreground animate-pulse"
+                                  : "text-muted-foreground hover:text-foreground")
                             }
+                            onPointerDown={prewarmMicrophone}
                             onClick={handleVoiceCaptureRequest}
-                            aria-label={isRecording ? "Stop voice input" : "Start voice input"}
-                            title={isRecording ? "Stop voice input" : "Start voice input"}
+                            aria-label={isRecording ? "Stop voice input" : isStartingVoice ? "Starting microphone…" : "Start voice input"}
+                            title={isRecording ? "Stop voice input" : isStartingVoice ? "Starting microphone…" : "Start voice input"}
                           >
                             <Mic className="size-3.5" strokeWidth={1.9} />
                           </Button>
