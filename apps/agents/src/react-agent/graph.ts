@@ -13,6 +13,7 @@ import {
 } from "./model-config.js";
 import { openUiGeneratedPromptMiddleware } from "./openui-generated-prompt-middleware.js";
 import { pageContextMiddleware } from "./page-context-middleware.js";
+import { serialFrontendToolGuardMiddleware } from "./serial-frontend-tool-guard.js";
 import { serialTaskGuardMiddleware } from "./serial-task-guard.js";
 import {
   FRONTEND_CONTROLLER_PROMPT_TEMPLATE,
@@ -74,12 +75,14 @@ function createRuntimeMiddleware({
   includeOpenUiGeneratedPrompt,
   includePageContext,
   includeSerialTaskGuard = false,
+  includeSerialFrontendToolGuard = false,
   runLimit,
 }: {
   includeFrontendGuard: boolean;
   includeOpenUiGeneratedPrompt: boolean;
   includePageContext: boolean;
   includeSerialTaskGuard?: boolean;
+  includeSerialFrontendToolGuard?: boolean;
   runLimit: number;
 }) {
   return [
@@ -94,6 +97,9 @@ function createRuntimeMiddleware({
       exitBehavior: "continue",
     }),
     ...(includeSerialTaskGuard ? [serialTaskGuardMiddleware] : []),
+    ...(includeSerialFrontendToolGuard
+      ? [serialFrontendToolGuardMiddleware]
+      : []),
     ...(includeFrontendGuard ? [frontendFailureGuardMiddleware] : []),
     contextEditingMiddleware(),
     ...(includeOpenUiGeneratedPrompt
@@ -143,6 +149,9 @@ const agent = createDeepAgent({
         includeFrontendGuard: true,
         includeOpenUiGeneratedPrompt: false,
         includePageContext: true,
+        // Only the frontend_controller owns browser round-trip tools, so only
+        // it needs the parallel browser-call backstop.
+        includeSerialFrontendToolGuard: true,
         runLimit: toolCallRunLimit,
       }),
     },
