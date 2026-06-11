@@ -724,7 +724,7 @@ export function Thread() {
     if (
       messages.length !== prevMessageLength.current &&
       messages?.length &&
-      messages[messages.length - 1].type === "ai"
+      messages[messages.length - 1]?.type === "ai"
     ) {
       setFirstTokenReceived(true);
     }
@@ -1294,7 +1294,7 @@ export function Thread() {
 
   const chatStarted = !!threadId || !!messages.length;
   const hasNoAIOrToolMessages = !messages.find(
-    (m) => m.type === "ai" || m.type === "tool",
+    (m) => m?.type === "ai" || m?.type === "tool",
   );
   const isEmbedded = process.env.NEXT_PUBLIC_EMBEDDED === "true";
 

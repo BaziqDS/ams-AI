@@ -143,10 +143,13 @@ export function AssistantMessage({
   );
 
   const thread = useStreamContext();
+  // thread.messages can contain holes (undefined slots) during optimistic
+  // updates and interrupt/resume merges — never index/iterate it unguarded.
   const isLastMessage =
-    thread.messages[thread.messages.length - 1].id === message?.id;
+    message?.id != null &&
+    thread.messages[thread.messages.length - 1]?.id === message.id;
   const hasNoAIOrToolMessages = !thread.messages.find(
-    (m) => m.type === "ai" || m.type === "tool",
+    (m) => m?.type === "ai" || m?.type === "tool",
   );
   const meta = message ? thread.getMessagesMetadata(message) : undefined;
   const threadInterrupt = thread.interrupt;
