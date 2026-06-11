@@ -490,14 +490,9 @@ export function Thread() {
   );
   const [input, setInput] = useState("");
   const [isRecording, setIsRecording] = useState(false);
-  const recognitionRef = useRef<{
-    stop: () => void;
-    abort: () => void;
-    onresult: ((event: unknown) => void) | null;
-    onerror: ((event: unknown) => void) | null;
-    onend: (() => void) | null;
-  } | null>(null);
-  const recordingBaseTextRef = useRef("");
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const [contextChip, setContextChip] = useState<ContextChipState | null>(null);
   const [firstTokenReceived, setFirstTokenReceived] = useState(false);
@@ -878,26 +873,12 @@ export function Thread() {
     setInput("");
   };
 
-  const stopVoiceRecognition = useCallback(() => {
-    const recognition = recognitionRef.current;
-    recognitionRef.current = null;
-    setIsRecording(false);
-    if (recognition) {
-      // Detach handlers so any late onresult/onend events don't clobber
-      // the user's manual edits after they pressed stop.
-      recognition.onresult = null;
-      recognition.onerror = null;
-      recognition.onend = null;
-      try {
-        recognition.stop();
-      } catch {
-        try {
-          recognition.abort();
-        } catch {
-          /* ignore */
-        }
-      }
-    }
+  const releaseMediaStream = useCallback(() => {
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+  }, []);
+
+  const focusChatInput = useCallback(() => {
     const textarea = chatInputRef.current;
     if (textarea) {
       requestAnimationFrame(() => {
@@ -912,69 +893,78 @@ export function Thread() {
     }
   }, []);
 
-  const handleVoiceCaptureRequest = useCallback(() => {
+  const stopVoiceRecording = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    setIsRecording(false);
+    if (recorder && recorder.state !== "inactive") {
+      try {
+        recorder.stop();
+      } catch {
+        releaseMediaStream();
+      }
+    } else {
+      releaseMediaStream();
+    }
+  }, [releaseMediaStream]);
+
+  // Voice input records audio locally (MediaRecorder) and transcribes it in
+  // one shot through the parent AMS app's Whisper endpoint. No realtime
+  // word-by-word browser recognition — the transcript lands once, complete.
+  const handleVoiceCaptureRequest = useCallback(async () => {
     if (typeof window === "undefined") return;
-    if (recognitionRef.current) {
-      stopVoiceRecognition();
+    if (mediaRecorderRef.current) {
+      stopVoiceRecording();
       return;
     }
-    type SpeechRecognitionLike = {
-      continuous: boolean;
-      interimResults: boolean;
-      lang: string;
-      onresult: ((event: unknown) => void) | null;
-      onerror: ((event: unknown) => void) | null;
-      onend: (() => void) | null;
-      start: () => void;
-      stop: () => void;
-      abort: () => void;
-    };
-    const win = window as typeof window & {
-      SpeechRecognition?: new () => SpeechRecognitionLike;
-      webkitSpeechRecognition?: new () => SpeechRecognitionLike;
-    };
-    const Recognition = win.SpeechRecognition ?? win.webkitSpeechRecognition;
-    if (!Recognition) {
+    if (!copilotBridge.hasParent()) {
+      toast.info("Voice input is available inside the AMS app.");
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       toast.info("Voice input is not supported in this browser.");
       return;
     }
-    const recognition = new Recognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = "ur-PK";
-    recordingBaseTextRef.current = input ? `${input} ` : "";
-    recognition.onresult = (event: unknown) => {
-      const results = (event as {
-        results?: ArrayLike<ArrayLike<{ transcript?: string }>>;
-      }).results;
-      if (!results) return;
-      const parts: string[] = [];
-      for (let i = 0; i < results.length; i += 1) {
-        const item = results[i]?.[0]?.transcript;
-        if (item) parts.push(item);
-      }
-      const joined = parts.join(" ").replace(/\s+/g, " ").trim();
-      setInput(`${recordingBaseTextRef.current}${joined}`);
-    };
-    recognition.onerror = () => {
-      recognitionRef.current = null;
-      setIsRecording(false);
-    };
-    recognition.onend = () => {
-      recognitionRef.current = null;
-      setIsRecording(false);
-    };
     try {
-      recognition.start();
-      recognitionRef.current = recognition;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+      recorder.onstop = async () => {
+        releaseMediaStream();
+        const blob = new Blob(audioChunksRef.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
+        audioChunksRef.current = [];
+        if (blob.size === 0) return;
+        try {
+          // "auto" lets Whisper detect the spoken language, so English,
+          // Urdu, and mixed commands all transcribe correctly.
+          const transcript = (await copilotBridge.transcribe(blob, "auto")).trim();
+          if (transcript) {
+            setInput((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
+            focusChatInput();
+          }
+        } catch (err) {
+          console.warn("[Thread] transcription failed:", err);
+          toast.error("Could not transcribe voice input. Please try again.");
+        }
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
       setIsRecording(true);
     } catch {
-      recognitionRef.current = null;
+      releaseMediaStream();
+      mediaRecorderRef.current = null;
       setIsRecording(false);
+      toast.info("Microphone access was denied.");
     }
-  }, [input, stopVoiceRecognition]);
+  }, [stopVoiceRecording, releaseMediaStream, focusChatInput]);
 
-  useEffect(() => () => stopVoiceRecognition(), [stopVoiceRecognition]);
+  useEffect(() => () => stopVoiceRecording(), [stopVoiceRecording]);
 
   const handleRegenerate = async (
     parentCheckpoint: Checkpoint | null | undefined,
