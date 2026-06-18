@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { CopilotBridge } from "./copilot-bridge";
+import { CopilotBridge, frontendActionTimeoutMs } from "./copilot-bridge";
 
 const bridgeSource = readFileSync(
   join(process.cwd(), "src", "lib", "copilot-bridge.ts"),
@@ -144,4 +144,10 @@ test("requestVoiceCapture asks the parent AMS shell to start voice mode", () => 
 test("voice transcription goes through the browser recognizer, not the bridge", () => {
   assert.doesNotMatch(bridgeSource, /transcribe/i);
   assert.doesNotMatch(bridgeSource, /TRANSCRIBE_REQUEST/);
+});
+
+test("request_form_submit gets a longer bridge timeout than regular actions", () => {
+  assert.equal(frontendActionTimeoutMs("request_form_submit"), 60_000);
+  assert.equal(frontendActionTimeoutMs("set_form_values"), 15_000);
+  assert.equal(frontendActionTimeoutMs("navigate_to_route"), 15_000);
 });

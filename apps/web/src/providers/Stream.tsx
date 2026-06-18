@@ -83,8 +83,12 @@ async function checkGraphStatus(
     });
 
     return res.ok;
-  } catch (e) {
-    console.error(e);
+  } catch {
+    // A failed /info request is expected while the LangGraph server is starting
+    // up or briefly unreachable during a restart. Do NOT surface the raw
+    // "Failed to fetch" TypeError to console.error — in Next dev that pops the
+    // error overlay on every restart. The caller retries with backoff and only
+    // warns once the server stays down past the grace window.
     return false;
   }
 }
@@ -196,21 +200,46 @@ const StreamSession = ({
   }, [onResetSession, setThreadId, streamValue]);
 
   useEffect(() => {
-    checkGraphStatus(apiUrl, apiKey).then((ok) => {
-      if (!ok) {
-        toast.error("Failed to connect to LangGraph server", {
-          description: () => (
-            <p>
-              Please ensure your graph is running at <code>{apiUrl}</code> and
-              your API key is correctly set (if connecting to a deployed graph).
-            </p>
-          ),
-          duration: 10000,
-          richColors: true,
-          closeButton: true,
-        });
+    // Retry for a grace window before alerting: a `langgraphjs dev` restart
+    // leaves /info unreachable for a few seconds, and we don't want to flash a
+    // connection error every time the agent server reloads. ~5 tries × 2s gives
+    // the server ~10s to come back; only then do we warn (once) and toast.
+    const MAX_ATTEMPTS = 5;
+    const RETRY_DELAY_MS = 2000;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const probe = async (attempt: number) => {
+      const ok = await checkGraphStatus(apiUrl, apiKey);
+      if (cancelled || ok) return;
+
+      if (attempt < MAX_ATTEMPTS) {
+        timer = setTimeout(() => void probe(attempt + 1), RETRY_DELAY_MS);
+        return;
       }
-    });
+
+      console.warn(
+        `LangGraph server not reachable at ${apiUrl} after ${MAX_ATTEMPTS} attempts.`,
+      );
+      toast.error("Failed to connect to LangGraph server", {
+        description: () => (
+          <p>
+            Please ensure your graph is running at <code>{apiUrl}</code> and
+            your API key is correctly set (if connecting to a deployed graph).
+          </p>
+        ),
+        duration: 10000,
+        richColors: true,
+        closeButton: true,
+      });
+    };
+
+    void probe(1);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [apiKey, apiUrl]);
 
   const contextValue = useMemo(

@@ -75,6 +75,30 @@ test("matches subcategory_create", () => {
   assert.match(guidance, /parent category/);
 });
 
+test("matches item_instance_create", () => {
+  const guidance = getFormWorkflowGuidance("item_instance_create");
+  assert.ok(guidance);
+  assert.match(guidance, /INDIVIDUAL/);
+  assert.match(guidance, /serial number \/ QR code/);
+});
+
+test("matches item_batch_create", () => {
+  const guidance = getFormWorkflowGuidance("item_batch_create");
+  assert.ok(guidance);
+  assert.match(guidance, /QUANTITY/);
+  assert.match(guidance, /batch number/);
+});
+
+test("item_create does not match the instance/batch scoped forms", () => {
+  // The anchored /^item[_-]create$/ regex must not swallow item_instance_create
+  // or item_batch_create, which have their own dedicated guidance.
+  assert.match(getFormWorkflowGuidance("item_create") ?? "", /category FIRST/);
+  assert.doesNotMatch(
+    getFormWorkflowGuidance("item_instance_create") ?? "",
+    /category FIRST/,
+  );
+});
+
 test("returns null for unknown form", () => {
   const guidance = getFormWorkflowGuidance("custom_module_xyz_create");
   assert.strictEqual(guidance, null);

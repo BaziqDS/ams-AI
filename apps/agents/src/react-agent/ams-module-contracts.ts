@@ -14,6 +14,10 @@ type ModuleContract = {
   viewCapability?: string;
   createForm?: CreateFormContract;
   scopedForms?: CreateFormContract[];
+  // One-line hint about write actions available on the DETAIL page that are
+  // registered at runtime (not opened via open_form). The live page state is
+  // still authoritative for which of these are actually allowed right now.
+  detailWorkflow?: string;
 };
 
 const AMS_COPILOT_MODULES: ModuleContract[] = [
@@ -28,6 +32,8 @@ const AMS_COPILOT_MODULES: ModuleContract[] = [
       route: "/inspections",
       requiredCapability: "inspections:manage",
     },
+    detailWorkflow:
+      "Detail page auto-opens the current stage form; advance it with request_form_submit intent submit (submit / approve / return / reject). Do NOT open_form for stages.",
   },
   {
     id: "locations",
@@ -80,6 +86,22 @@ const AMS_COPILOT_MODULES: ModuleContract[] = [
       route: "/items",
       requiredCapability: "items:manage",
     },
+    scopedForms: [
+      {
+        formId: "item_instance_create",
+        routePattern: "/items/{id}",
+        samePageOnly: true,
+        requiredCapability: "items:manage",
+      },
+      {
+        formId: "item_batch_create",
+        routePattern: "/items/{id}",
+        samePageOnly: true,
+        requiredCapability: "items:manage",
+      },
+    ],
+    detailWorkflow:
+      "Instances (INDIVIDUAL / serial-QR items) and batches (QUANTITY / bulk items) are child records of the item — open item_instance_create or item_batch_create on the item detail page. Pick the one matching the item's tracking_type.",
   },
   {
     id: "stock-entries",
@@ -92,6 +114,8 @@ const AMS_COPILOT_MODULES: ModuleContract[] = [
       route: "/stock-entries",
       requiredCapability: "stock-entries:manage",
     },
+    detailWorkflow:
+      "Detail page exposes the acknowledge / receive step for a RECEIPT entry; run it through the registered submit action (request_form_submit intent submit) so human approval applies. Stock is only received once it returns ok=true.",
   },
   {
     id: "stock-registers",
@@ -104,6 +128,42 @@ const AMS_COPILOT_MODULES: ModuleContract[] = [
       route: "/stock-registers",
       requiredCapability: "stock-registers:manage",
     },
+  },
+  {
+    id: "maintenance",
+    label: "Maintenance",
+    listRoute: "/maintenance",
+    detailRoutePattern: "/maintenance/{id}",
+    viewCapability: "maintenance:view",
+    detailWorkflow:
+      "Copilot can navigate and read maintenance work orders. There is NO copilot create form yet — to create or edit one, tell the user to use the create/edit button on the page.",
+  },
+  {
+    id: "depreciation",
+    label: "Depreciation",
+    listRoute: "/depreciation",
+    detailRoutePattern: "/depreciation/{id}",
+    viewCapability: "depreciation:view",
+    detailWorkflow:
+      "Copilot can navigate and read depreciation records. There is NO copilot create form yet — to record or adjust depreciation, tell the user to use the page's button.",
+  },
+  {
+    id: "users",
+    label: "Users",
+    listRoute: "/users",
+    detailRoutePattern: "/users/{id}",
+    viewCapability: "users:view",
+    detailWorkflow:
+      "Admin module. Copilot can navigate and read users. Managing users is done in the AMS admin UI — no copilot create form.",
+  },
+  {
+    id: "roles",
+    label: "Roles",
+    listRoute: "/roles",
+    detailRoutePattern: "/roles/{id}",
+    viewCapability: "roles:view",
+    detailWorkflow:
+      "Admin module. Copilot can navigate and read roles. Managing roles is done in the AMS admin UI — no copilot create form.",
   },
 ];
 
@@ -136,20 +196,23 @@ function formatModule(module: ModuleContract): string {
     attrs.push(`view_capability="${module.viewCapability}"`);
   }
 
-  const forms: string[] = [];
-  if (module.createForm) forms.push(formatForm(module.createForm));
+  const lines: string[] = [];
+  if (module.createForm) lines.push(formatForm(module.createForm));
   for (const scoped of module.scopedForms ?? []) {
-    forms.push(formatForm(scoped));
+    lines.push(formatForm(scoped));
+  }
+  if (module.detailWorkflow) {
+    lines.push(`    <detail_actions>${module.detailWorkflow}</detail_actions>`);
   }
 
-  if (forms.length === 0) {
+  if (lines.length === 0) {
     return `  <module ${attrs.join(" ")}>
     <!-- no create form exposed through the compact manifest -->
   </module>`;
   }
 
   return `  <module ${attrs.join(" ")}>
-${forms.join("\n")}
+${lines.join("\n")}
   </module>`;
 }
 

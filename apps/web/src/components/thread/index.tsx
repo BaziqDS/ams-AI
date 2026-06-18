@@ -998,7 +998,11 @@ export function Thread() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const trimmed = input.trim();
-    if (!trimmed || isLoading) return;
+    // Block sending while the mic is still open: the recorder is mid-capture
+    // and the transcript is still being written into the input. The user must
+    // stop/close the recorder first, otherwise we'd send a half-captured
+    // message. The send button is also disabled in this state (see below).
+    if (!trimmed || isLoading || isRecording || isStartingVoice) return;
 
     // TEMP: translation disabled — send the raw Urdu/English mix straight to
     // the model, matching the detached composer in the AMS side panel.
@@ -1623,9 +1627,9 @@ export function Thread() {
                             type="submit"
                             size="icon"
                             className="size-[30px] rounded-full border-0 bg-gray-900 text-white shadow-[0_2px_8px_-2px_rgba(0,0,0,0.35)] transition-all duration-150 hover:bg-black hover:shadow-[0_4px_14px_-2px_rgba(0,0,0,0.4)] active:scale-95 disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none disabled:cursor-not-allowed"
-                            disabled={isLoading || !input.trim()}
+                            disabled={isLoading || !input.trim() || isRecording || isStartingVoice}
                             aria-label="Send message"
-                            title="Send message"
+                            title={isRecording ? "Stop the recording before sending" : "Send message"}
                           >
                             <SendHorizontal className="size-3.5" strokeWidth={2} />
                           </Button>

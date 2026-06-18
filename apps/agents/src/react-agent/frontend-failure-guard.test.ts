@@ -108,6 +108,34 @@ test("stale form context failures stop old-page form retries", () => {
   assert.match(message ?? "", /will stop/i);
 });
 
+test("timed out request_form_submit failures stop duplicate submit retries", () => {
+  const message = getFrontendFailureStopMessage([
+    {
+      name: "request_form_submit",
+      content:
+        'Frontend action "request_form_submit" FAILED: Frontend action "request_form_submit" timed out.',
+    },
+  ]);
+
+  assert.match(message ?? "", /stop retrying request_form_submit/i);
+  assert.match(message ?? "", /avoid duplicate submissions/i);
+  assert.match(message ?? "", /current page/i);
+});
+
+test("disabled request_form_submit failures stop submit retries", () => {
+  const message = getFrontendFailureStopMessage([
+    {
+      name: "request_form_submit",
+      content:
+        'Frontend action "request_form_submit" is not allowed for the signed-in user or current form state. Do not try to submit it.',
+    },
+  ]);
+
+  assert.match(message ?? "", /request_form_submit is not allowed/i);
+  assert.match(message ?? "", /stop retrying/i);
+  assert.match(message ?? "", /current page state/i);
+});
+
 test("stale submit tool calls stop before human approval is requested", () => {
   const message = getStaleFormToolCallStopMessage(
     [

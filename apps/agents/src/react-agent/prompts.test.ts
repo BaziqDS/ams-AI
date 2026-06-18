@@ -303,6 +303,14 @@ test("prompt requires every visible final response to be OpenUI", () => {
   );
   assert.match(
     SYSTEM_PROMPT_TEMPLATE,
+    /`root =` is literal final-message OpenUI code, not a tool or function call/i,
+  );
+  assert.match(
+    ORCHESTRATOR_PROMPT_TEMPLATE,
+    /Never emit a tool call named `root`/i,
+  );
+  assert.match(
+    SYSTEM_PROMPT_TEMPLATE,
     /Do not send plain text, markdown, fenced markdown, JSON, or explanatory prose/i,
   );
   assert.match(

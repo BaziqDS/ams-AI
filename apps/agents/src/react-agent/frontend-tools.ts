@@ -426,7 +426,12 @@ function rejectedHitlMessage(value: unknown) {
   ) {
     return decision.message.trim();
   }
-  return "User rejected request_form_submit. Do not submit the form.";
+  return (
+    "STOP — the user REJECTED this submission. The form was NOT submitted and nothing was saved. " +
+    "Do NOT call request_form_submit again for this form, and do NOT retry, re-validate, or 'try once more'. " +
+    "A rejection is the human's decision to not proceed. Acknowledge it in your final OpenUI response and ask " +
+    "the user what they would like to change or do next, then wait for their instruction before any further submit."
+  );
 }
 
 export function requestFormSubmitWithPreflight(

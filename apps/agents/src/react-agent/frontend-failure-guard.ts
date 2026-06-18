@@ -149,6 +149,37 @@ function isStaleFormContextFailure(message: MessageLike | undefined) {
   );
 }
 
+function getRequestSubmitHardFailureMessage(message: MessageLike | undefined) {
+  const content = messageContent(message);
+  if (message?.name !== "request_form_submit") return null;
+
+  if (
+    /Frontend action "request_form_submit" FAILED:\s*Frontend action "request_form_submit" timed out/i.test(
+      content,
+    )
+  ) {
+    return (
+      "I did not receive a submit result before the frontend action timed out. " +
+      "I will stop retrying request_form_submit to avoid duplicate submissions. " +
+      "Check the current page or saved record state before submitting another stage."
+    );
+  }
+
+  if (
+    /Frontend action "request_form_submit" is not allowed for the signed-in user or current form state/i.test(
+      content,
+    ) ||
+    /Do not try to submit it/i.test(content)
+  ) {
+    return (
+      "request_form_submit is not allowed in the current page state. " +
+      "I will stop retrying it. Use the current page state, open the correct record/form, or wait for the page to expose an allowed submit action before submitting again."
+    );
+  }
+
+  return null;
+}
+
 function recentInvalidFormSchemaFailures(messages: MessageLike[]) {
   return messages.filter(isInvalidFormSchemaFailure).slice(-2);
 }
@@ -234,6 +265,9 @@ function extractStaleFormContext(content: string) {
 export function getFrontendFailureStopMessage(messages: MessageLike[]) {
   const lastMessage = messages.at(-1);
   const lastContent = messageContent(lastMessage);
+
+  const submitHardFailureMessage = getRequestSubmitHardFailureMessage(lastMessage);
+  if (submitHardFailureMessage) return submitHardFailureMessage;
 
   if (isStaleFormContextFailure(lastMessage)) {
     const { targetForm, currentPage, activeForm } =
